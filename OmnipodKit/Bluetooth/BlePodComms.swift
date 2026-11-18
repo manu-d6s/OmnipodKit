@@ -488,6 +488,12 @@ class BlePodComms: PodComms {
                     let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
                     log.bleDebug("@@@ O5 AID [9/9]: UnifiedAidPodStatusCommand (G3.12) response: %d bytes — %{public}@",
                              response.count, response.hexadecimalString)
+                    do {
+                        let status = try O5UnifiedAidStatus(response)
+                        log.bleDebug("@@@ O5 AID [9/9]: %{public}@", status.description)
+                    } catch {
+                        log.bleDebug("@@@ O5 AID [9/9]: G3.12 not decoded: %{public}@", String(describing: error))
+                    }
                 }
             } catch {
                 log.error("@@@ O5 AID [9/9]: AID Pod Status command failed: %{public}@", String(describing: error))
