@@ -399,6 +399,7 @@ class BlePodComms: PodComms {
         do {
             let (payload, prefix) = O5AidCommands.UtcCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.extendedSet(response, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
             log.bleDebug("@@@ O5 AID [1/9]: UtcCommand response: %{public}@", responseStr)
         } catch {
@@ -411,6 +412,7 @@ class BlePodComms: PodComms {
         do {
             let (payload, prefix) = O5AidCommands.TdiCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
             log.bleDebug("@@@ O5 AID [2/9]: TdiCommand response: %{public}@", responseStr)
         } catch {
@@ -423,6 +425,7 @@ class BlePodComms: PodComms {
         do {
             let (payload, prefix) = O5AidCommands.TargetBgProfileCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             log.bleDebug("@@@ O5 AID [3/9]: TargetBgProfileCommand response: %{public}d bytes", response.count)
         } catch {
             log.error("@@@ O5 AID [3/9]: TargetBgProfileCommand failed: %{public}@", String(describing: error))
@@ -434,6 +437,7 @@ class BlePodComms: PodComms {
         do {
             let (payload, prefix) = O5AidCommands.DiaCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
             log.bleDebug("@@@ O5 AID [4/9]: DiaCommand response: %{public}@", responseStr)
         } catch {
@@ -446,6 +450,7 @@ class BlePodComms: PodComms {
         do {
             let (payload, prefix) = O5AidCommands.EgvCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
             log.bleDebug("@@@ O5 AID [5/9]: EgvCommand response: %{public}@", responseStr)
         } catch {
@@ -459,6 +464,7 @@ class BlePodComms: PodComms {
             do {
                 let (payload, prefix) = O5AidCommands.AlgorithmInsulinHistoryCommand.payload()
                 let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+                try O5AidReplyCheck.extendedSet(response, responsePrefix: prefix)
                 let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
                 log.bleDebug("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 response: %{public}@",
                              batch + 5, batch, responseStr)
