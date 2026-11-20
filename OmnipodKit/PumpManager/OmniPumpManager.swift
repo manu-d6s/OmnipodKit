@@ -2138,6 +2138,33 @@ extension OmniPumpManager {
         }
     }
 
+    /// Reads the O5 AID status (G3.12), CGM interface (G4.2) and sensor info (G4.1).
+    /// Read-only: nothing is written to the Pod.
+    func readO5CgmStatus() async throws -> String {
+        guard self.hasSetupPod else {
+            throw OmniPumpManagerError.noPodPaired
+        }
+        guard state.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "The O5 CGM status is only available for an Omnipod 5 Pod")
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.runSession(withName: "Read O5 CGM Status") { (result) in
+                switch result {
+                case .success(let session):
+                    continuation.resume(with: Result {
+                        let status = try session.sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
+                        let interface = try session.sendO5AidCommand((data: Data("G4.2".utf8), responsePrefix: "4.2="))
+                        let sensor = try session.sendO5AidCommand((data: Data("G4.1".utf8), responsePrefix: "4.1="))
+                        return O5CgmStatusReport.text(status: status, interface: interface, sensor: sensor)
+                    })
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func readTriggeredAlerts() async throws -> String {
         // use hasSetupPod here instead of hasActivePod as PodInfo can be read with a faulted Pod
         guard self.hasSetupPod else {

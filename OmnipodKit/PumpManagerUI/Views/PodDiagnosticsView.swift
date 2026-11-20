@@ -21,6 +21,8 @@ protocol DiagnosticCommands {
     func readTriggeredAlerts() async throws -> String
     func getDetailedStatus() async throws -> DetailedStatus
     func pumpManagerDetails() -> String
+    var isO5Pod: Bool { get }
+    func readO5CgmStatus() async throws -> String
 }
 
 struct PodDiagnosticsView: View  {
@@ -38,6 +40,19 @@ struct PodDiagnosticsView: View  {
                     .foregroundColor(Color.primary)
             }
             .disabled(noPod)
+
+            if diagnosticCommands.isO5Pod {
+                NavigationLink(destination: ReadPodInfoView(
+                    title: LocalizedString("Read O5 CGM Status", comment: "Text for read O5 CGM status title"),
+                    actionString: LocalizedString("Reading O5 CGM Status...", comment: "Text for read O5 CGM status action"),
+                    failedString: LocalizedString("Failed to read O5 CGM status", comment: "Alert title for error when reading O5 CGM status"),
+                    action: { try await diagnosticCommands.readO5CgmStatus() }))
+                {
+                    FrameworkLocalText("Read O5 CGM Status", comment: "Text for read O5 CGM status navigation link")
+                        .foregroundColor(Color.primary)
+                }
+                .disabled(noPod)
+            }
 
             NavigationLink(destination: PlayTestBeepsView(playTestBeeps: {
                 try await diagnosticCommands.playTestBeeps()

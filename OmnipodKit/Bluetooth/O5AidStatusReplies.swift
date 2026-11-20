@@ -98,38 +98,98 @@ struct O5CgmInterfaceStatus: CustomStringConvertible {
     }
 }
 
-/// The G3.12 unified AID status reply. Only the fields the early control enable
-/// checks are kept, but the whole reply is validated.
+/// The G3.12 unified AID status reply.
 struct O5UnifiedAidStatus {
+    /// The G7 part of the CGM data, present when `cgmType` is 7.
+    struct G7 {
+        let sessionActivationTime: UInt32
+        let sessionDuration: Int32
+        let sensorTimestamp: Int32
+        let algorithmState: UInt8
+        let transmitterStatus: UInt8
+        let trendRateRaw: Int8
+        let trendRateValidity: UInt8
+        var trendRate: Int8? { trendRateValidity == 1 ? trendRateRaw : nil }
+    }
+
+    let egvRaw: Int16
+    let referenceTime: UInt32
+    let totalDailyInsulin: UInt16
     let loopState: UInt8
+    let iobRaw: Int32
+    let podTime: UInt32
     let statusFlags: UInt8
     let stateFlags: UInt8
     let cgmType: UInt8
+    let cgmData: Data
+    let g7: G7?
 
     var algorithmReady: Bool { stateFlags & 1 != 0 }
     var podActive: Bool { stateFlags & 2 != 0 }
     var isManual: Bool { loopState == 1 }
+    /// Glucose in mg/dL; zero and negative values are placeholders, not readings.
+    var egv: Int16? { egvRaw > 0 ? egvRaw : nil }
+    var egvAge: TimeInterval? {
+        guard egv != nil, referenceTime > 0, podTime >= referenceTime else { return nil }
+        return TimeInterval(podTime - referenceTime)
+    }
 
     init(_ data: Data) throws {
         var r = O5AidReplyReader(data)
         try r.lengthPrefix()
-        _ = try r.number(2) // EGV
-        _ = try r.number(4) // EGV reference time
-        _ = try r.number(2) // total daily insulin
+        egvRaw = Int16(bitPattern: UInt16(try r.number(2)))
+        referenceTime = try r.number(4)
+        totalDailyInsulin = UInt16(try r.number(2))
         loopState = UInt8(try r.number(1))
-        _ = try r.number(4) // IOB
-        _ = try r.number(4) // Pod time
+        iobRaw = Int32(bitPattern: try r.number(4))
+        podTime = try r.number(4)
         statusFlags = UInt8(try r.number(1))
         stateFlags = UInt8(try r.number(1))
         guard stateFlags & 0xf0 == 0 else { throw O5AidStatusReplyError.malformed("reserved AID state flags") }
         cgmType = UInt8(try r.number(1))
         let length = Int(try r.number(2))
         guard length == r.remaining else { throw O5AidStatusReplyError.malformed("CGM data length mismatch") }
+        cgmData = try r.take(length)
         let knownLengths: [UInt8: Int] = [0: 0, 4: 9, 7: 16, 2: 7, 3: 7, 5: 7,
                                           8: 31, 9: 31, 10: 31, 11: 31, 12: 31]
         if let expected = knownLengths[cgmType], expected != length {
             throw O5AidStatusReplyError.malformed("CGM data size disagrees with sensor type")
         }
+        if cgmType == 7 {
+            var c = O5AidReplyReader(cgmData)
+            g7 = try G7(sessionActivationTime: c.number(4), sessionDuration: Int32(bitPattern: c.number(4)),
+                sensorTimestamp: Int32(bitPattern: c.number(4)), algorithmState: UInt8(c.number(1)),
+                transmitterStatus: UInt8(c.number(1)), trendRateRaw: Int8(bitPattern: UInt8(c.number(1))),
+                trendRateValidity: UInt8(c.number(1)))
+        } else {
+            g7 = nil
+        }
+    }
+}
+
+/// The G4.1 sensor information reply, G7 schema. A Pod without a configured
+/// sensor replies with the two bytes `00 00`.
+struct O5G7SensorInfo {
+    let isEmpty: Bool
+    let sensorType: UInt8?
+    let pairingCode: Data?
+    let serialNumber: Data?
+
+    init(_ data: Data) throws {
+        isEmpty = Data(data) == Data([0, 0])
+        let fields: [UInt8: Data] = isEmpty ? [:] : try o5Fields(data,
+            widths: [0: 4, 1: 1, 2: 4, 3: 12, 4: 2, 5: 6, 6: 4, 7: 4, 8: 1, 9: 1])
+        if let type = fields[1]?.first, type != 7 {
+            throw O5AidStatusReplyError.malformed("4.1 sensor type is not G7")
+        }
+        sensorType = fields[1]?.first
+        pairingCode = fields[2]
+        serialNumber = fields[3]
+    }
+
+    /// Whether the stored identity is exactly this pairing code and serial.
+    func matches(pairingCode code: String, serialNumber serial: String) -> Bool {
+        pairingCode == Data(code.utf8) && serialNumber == Data(serial.utf8)
     }
 }
 

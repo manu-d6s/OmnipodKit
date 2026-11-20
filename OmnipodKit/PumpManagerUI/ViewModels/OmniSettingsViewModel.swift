@@ -706,6 +706,8 @@ extension OmniPumpManager {
 }
 
 extension OmniPumpManager: DiagnosticCommands {
+    var isO5Pod: Bool { state.podType.isO5 }
+
     func pumpManagerDetails() -> String {
         let record: String
         let pod = state.podState ?? state.previousPodState
