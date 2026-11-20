@@ -1058,6 +1058,20 @@ class PodCommsSession: MessageTransportDelegate {
         return podInfoResponse
     }
 
+    /// Experimental: sends a Dexcom G7 identity to an O5 Pod whose control was enabled at
+    /// activation. One shot per Pod; see O5G7Identity.
+    func sendO5G7Identity(pairingCode: String, serialNumber: String) throws -> String {
+        assertOnSessionQueue()
+        guard podState.podType.isO5, podState.setupProgress == .completed, podState.fault == nil,
+              podState.unacknowledgedCommand == nil else {
+            throw PodCommsError.diagnosticMessage(str: "The G7 identity needs an active Omnipod 5 Pod with completed setup, no fault and no pending command")
+        }
+        return try O5G7Identity.send(target: podState.earlyControlTarget, firmware: podState.firmwareVersion,
+            bleFirmware: podState.iFirmwareVersion, pairingCode: pairingCode, serialNumber: serialNumber,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
     /// Sends an O5 AID command (see O5AidCommands) and returns the reply body after its prefix.
     func sendO5AidCommand(_ command: (data: Data, responsePrefix: String)) throws -> Data {
         guard let bleTransport = transport as? BlePodMessageTransport, podState.podType.isO5 else {

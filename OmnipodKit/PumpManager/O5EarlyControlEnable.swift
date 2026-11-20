@@ -4,7 +4,6 @@
 //
 
 import Foundation
-import Darwin
 
 /// Experimental, opt-in: enable the O5 Pod's CGM interface control once, right after
 /// cannula insertion, while the Pod stays in Manual mode. No sensor type or identity
@@ -45,107 +44,25 @@ enum O5EarlyControlEnable {
     static let enableRequest = Data("SE4.2=".utf8) + Data([0, 2, 4, 0])
     static let enableResponsePrefix = "ES4.2="
 
-    // MARK: - Activation record storage
-
-    /// One record directory per Pod, held under an exclusive lock while in use.
-    private final class RecordLease {
-        let directory: URL
-        private var lock: Int32 = -1
-
-        init(directory: URL) throws {
-            self.directory = directory
-            try Self.makePrivateDirectory(directory)
-            lock = open(directory.appendingPathComponent("record.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-            guard lock >= 0 else { throw Stopped(reason: "activation record cannot be opened") }
-            guard flock(lock, LOCK_EX | LOCK_NB) == 0 else {
-                close(lock); lock = -1
-                throw Stopped(reason: "activation record is in use")
-            }
-        }
-        deinit { if lock >= 0 { close(lock) } }
-
-        var file: URL { directory.appendingPathComponent("activation.json") }
-
-        /// Owner-only, file-protected and excluded from backups, so a restored
-        /// backup cannot bring back a record for a Pod it doesn't describe.
-        private static func makePrivateDirectory(_ url: URL) throws {
-            let fm = FileManager.default
-            if fm.fileExists(atPath: url.path) {
-                guard try fm.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType == .typeDirectory else {
-                    throw Stopped(reason: "activation record location is not a directory")
-                }
-            } else {
-                try fm.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            }
-            guard chmod(url.path, 0o700) == 0 else { throw Stopped(reason: "activation record permissions") }
-            #if os(iOS)
-            try fm.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
-            var protectedURL = url
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try protectedURL.setResourceValues(values)
-            #endif
-        }
-
-        /// Atomic, fsynced replacement of the record.
-        func write(_ data: Data) throws {
-            let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
-            let fd = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
-            guard fd >= 0 else { throw Stopped(reason: "activation record cannot be written") }
-            defer { close(fd); try? FileManager.default.removeItem(at: temporary) }
-            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
-            try handle.write(contentsOf: data)
-            #if os(iOS)
-            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: temporary.path)
-            #endif
-            guard fsync(fd) == 0, rename(temporary.path, file.path) == 0 else {
-                throw Stopped(reason: "activation record cannot be written")
-            }
-            let parent = open(directory.path, O_RDONLY)
-            guard parent >= 0 else { throw Stopped(reason: "activation record cannot be written") }
-            defer { close(parent) }
-            guard fsync(parent) == 0 else { throw Stopped(reason: "activation record cannot be written") }
-        }
-    }
+    // MARK: - Activation record storage (O5RecordLease)
 
     private static func root(_ override: URL?) throws -> URL {
         if let override { return override }
         return try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true).appendingPathComponent("O5EarlyControlEnable", isDirectory: true)
     }
-    private static func lease(_ id: String, _ directory: URL?) throws -> RecordLease {
+    private static func lease(_ id: String, _ directory: URL?) throws -> O5RecordLease {
         guard UUID(uuidString: id) != nil else { throw Stopped(reason: "invalid activation record identifier") }
-        return try RecordLease(directory: root(directory).appendingPathComponent(id, isDirectory: true))
+        return try O5RecordLease(directory: root(directory).appendingPathComponent(id, isDirectory: true))
     }
-    private static func encode<T: Encodable>(_ value: T) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(value)
-    }
-    private static func load(_ lease: RecordLease) throws -> Journal {
+    private static func load(_ lease: O5RecordLease) throws -> Journal {
         guard try FileManager.default.attributesOfItem(atPath: lease.file.path)[.type] as? FileAttributeType == .typeRegular else {
             throw Stopped(reason: "activation record is missing")
         }
         return try JSONDecoder().decode(Journal.self, from: Data(contentsOf: lease.file))
     }
-    private static func save(_ journal: Journal, _ lease: RecordLease) throws {
-        try lease.write(encode(journal))
-    }
-
-    /// The installed app and OmnipodKit revisions, from Trio's BuildDetails.plist.
-    private static var revisions: [String: String] {
-        let details = Bundle.main.url(forResource: "BuildDetails", withExtension: "plist")
-            .flatMap { try? Data(contentsOf: $0) }
-            .flatMap { try? PropertyListSerialization.propertyList(from: $0, options: [], format: nil) as? [String: Any] } ?? [:]
-        let modules = details["com-trio-submodules"] as? [String: [String: Any]]
-        return [
-            "hostBuild": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
-            "hostTrioCommitSHA": details["com-trio-commit-sha"] as? String ?? "unknown",
-            "hostTrioBranch": details["com-trio-branch"] as? String ?? "unknown",
-            "hostBuildDate": details["com-trio-build-date"] as? String ?? "unknown",
-            "hostOmnipodKitCommitSHA": modules?["OmnipodKit"]?["commit_sha"] as? String ?? "unknown",
-            "hostOmnipodKitBranch": modules?["OmnipodKit"]?["branch"] as? String ?? "unknown",
-        ]
+    private static func save(_ journal: Journal, _ lease: O5RecordLease) throws {
+        try lease.write(O5RecordLease.encode(journal))
     }
 
     // MARK: - Lifecycle
@@ -154,12 +71,15 @@ enum O5EarlyControlEnable {
     /// persisted in that PodState. A missing record is never recreated later.
     static func arm(id: String, target: String, firmware: String, bleFirmware: String,
                     directory: URL? = nil) throws {
-        let lease = try lease(id, directory)
-        guard !FileManager.default.fileExists(atPath: lease.file.path), !target.isEmpty else {
-            throw Stopped(reason: "activation record already exists or target is empty")
-        }
-        try save(Journal(schema: 1, id: id, target: target, firmware: firmware, bleFirmware: bleFirmware,
-                         armed: Date(), revisions: revisions, phase: "armed"), lease)
+        do {
+            let lease = try lease(id, directory)
+            guard !FileManager.default.fileExists(atPath: lease.file.path), !target.isEmpty else {
+                throw Stopped(reason: "activation record already exists or target is empty")
+            }
+            try save(Journal(schema: 1, id: id, target: target, firmware: firmware, bleFirmware: bleFirmware,
+                             armed: Date(), revisions: O5RecordLease.revisions, phase: "armed"), lease)
+        } catch let error as Stopped { throw error }
+        catch { throw Stopped(reason: "activation record unavailable: \(error.localizedDescription)") }
     }
 
     /// Read-only check before priming, basal programming and insertion. A marked Pod
@@ -178,7 +98,7 @@ enum O5EarlyControlEnable {
     }
 
     /// Any Pod firmware may attempt the enable; the record must match the Pod it was armed for.
-    private static func admitted(_ lease: RecordLease, id: String, target: String,
+    private static func admitted(_ lease: O5RecordLease, id: String, target: String,
                                  firmware: String, bleFirmware: String) throws -> Journal {
         let journal = try load(lease)
         guard journal.schema == 1, journal.id == id, journal.target == target,
@@ -280,6 +200,6 @@ enum O5EarlyControlEnable {
     /// The record as JSON, for diagnostics. Reads local evidence only.
     static func record(id: String, directory: URL? = nil) throws -> String {
         let lease = try lease(id, directory)
-        return String(decoding: try encode(load(lease)), as: UTF8.self)
+        return String(decoding: try O5RecordLease.encode(load(lease)), as: UTF8.self)
     }
 }

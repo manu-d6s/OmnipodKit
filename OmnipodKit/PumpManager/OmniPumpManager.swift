@@ -2165,6 +2165,29 @@ extension OmniPumpManager {
         }
     }
 
+    /// Experimental, one shot per Pod: sends a Dexcom G7 identity to the active O5 Pod.
+    func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String {
+        guard self.hasActivePod else {
+            throw OmniPumpManagerError.noPodPaired
+        }
+        guard state.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "The G7 identity is only available for an Omnipod 5 Pod")
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.runSession(withName: "Send O5 G7 Identity") { (result) in
+                switch result {
+                case .success(let session):
+                    continuation.resume(with: Result {
+                        try session.sendO5G7Identity(pairingCode: pairingCode, serialNumber: serialNumber)
+                    })
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func readTriggeredAlerts() async throws -> String {
         // use hasSetupPod here instead of hasActivePod as PodInfo can be read with a faulted Pod
         guard self.hasSetupPod else {

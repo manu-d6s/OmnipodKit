@@ -714,6 +714,15 @@ extension OmniPumpManager: DiagnosticCommands {
         if let id = pod?.earlyControlEnableID {
             record = (try? O5EarlyControlEnable.record(id: id)) ?? "Activation record unavailable; no operation resumed"
         } else { record = "Early control enable was not armed for this Pod" }
+        var g7Record = "No G7 identity was sent to this Pod"
+        if let pod {
+            do {
+                if let json = try O5G7Identity.record(target: pod.earlyControlTarget) { g7Record = json }
+            } catch {
+                g7Record = "G7 identity record unavailable: \(error.localizedDescription)"
+            }
+        }
         return debugDescription + "\n\nEarly control enable activation record:\n" + record
+            + "\n\nG7 identity record:\n" + g7Record
     }
 }

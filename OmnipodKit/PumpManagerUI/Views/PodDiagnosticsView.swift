@@ -23,6 +23,7 @@ protocol DiagnosticCommands {
     func pumpManagerDetails() -> String
     var isO5Pod: Bool { get }
     func readO5CgmStatus() async throws -> String
+    func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String
 }
 
 struct PodDiagnosticsView: View  {
@@ -52,6 +53,14 @@ struct PodDiagnosticsView: View  {
                         .foregroundColor(Color.primary)
                 }
                 .disabled(noPod)
+
+                NavigationLink(destination: O5G7IdentityView(send: { code, serial in
+                    try await diagnosticCommands.sendO5G7Identity(pairingCode: code, serialNumber: serial)
+                })) {
+                    FrameworkLocalText("Experimental: Send G7 Identity", comment: "Text for the experimental send G7 identity navigation link")
+                        .foregroundColor(Color.primary)
+                }
+                .disabled(!podOk)
             }
 
             NavigationLink(destination: PlayTestBeepsView(playTestBeeps: {
