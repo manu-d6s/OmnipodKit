@@ -128,6 +128,51 @@ final class O5EarlyControlEnableTests: XCTestCase {
         XCTAssertThrowsError(try O5EarlyControlEnable.check(id: id, target: "pod-A", firmware: "9.0.4",
                                                             bleFirmware: "5.0.2", directory: root))
     }
+    func testTypeOneAfterTheEnableIsAccepted() throws {
+        afterWrite = { self.cgm = 1 }
+        try finish()
+        XCTAssertEqual(writes.count, 1)
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+    }
+    func testTypeOneWhileControlIsNotEnabledStopsBeforeWrite() throws {
+        cgm = 1
+        XCTAssertThrowsError(try finish()); XCTAssertTrue(writes.isEmpty)
+    }
+    func testOtherCgmTypesStopBeforeWrite() throws {
+        for type: UInt8 in [7, 4] {
+            cgm = type; control = 0; try setPhase("armed"); requests.removeAll()
+            XCTAssertThrowsError(try finish()); XCTAssertTrue(writes.isEmpty)
+        }
+    }
+    /// The replies of the first early enable on a worn Pod (firmware 9.0.4 / BLE 5.0.2,
+    /// 2026-11-20), two minutes after insertion. The final 3.12 reports CGM type 1.
+    func testCapturedFirstPodRepliesVerify() throws {
+        let replies: [String: [String]] = [
+            "G3.12": ["0016000000000000000e01800000006b00c1d00003000000",
+                      "0016fff76b00c1d1000e01000000006b00c1d10003010000"],
+            "G4.2": ["000d00ffffffff01000201030104ff", "000d00ffffffff0100020103010400"],
+        ]
+        var served: [String: Int] = [:]
+        var detailedReads = 0
+        let detailedReplies = ["02080100000c003700000003ff000200000000005710",
+                               "02080100000c003700000003ff000200000000001057"]
+        try O5EarlyControlEnable.finish(id: id, target: "pod-A", firmware: "9.0.4", bleFirmware: "5.0.2",
+            directory: root,
+            send: { request, prefix in
+                self.requests.append(request)
+                if request.starts(with: Data("SE4.2=".utf8)) { return Data("0".utf8) }
+                let key = String(decoding: request, as: UTF8.self)
+                let index = served[key, default: 0]
+                served[key] = index + 1
+                return Data(hexadecimalString: replies[key]![index])!
+            },
+            detailedStatus: {
+                defer { detailedReads += 1 }
+                return Data(hexadecimalString: detailedReplies[detailedReads])!
+            })
+        XCTAssertEqual(writes, [Data("SE4.2=".utf8) + Data([0, 2, 4, 0])])
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+    }
     func testCannotRearmOrOverwriteAttempt() throws {
         let data = try Data(contentsOf: file)
         XCTAssertThrowsError(try O5EarlyControlEnable.arm(id: id, target: "pod-B", firmware: "9.0.4", bleFirmware: "5.0.2", directory: root))

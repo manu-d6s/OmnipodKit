@@ -228,13 +228,17 @@ enum O5EarlyControlEnable {
             try save(journal, lease)
             return response
         }
-        func status() throws {
+        // With control enabled and no sensor configured, 3.12 reports CGM type 1
+        // (seen on firmware 9.0.4 right after the enable); before that it is 0.
+        @discardableResult
+        func status() throws -> O5UnifiedAidStatus {
             let aid = try O5UnifiedAidStatus(exchange(Data("G3.12".utf8), "3.12="))
             let detailed = try O5DetailedStatusPage2(exchange(Data([0x0e, 0x01, 0x02]), "legacy-page-2"))
             guard detailed.fault == 0, detailed.active, detailed.deliveryStatus == 1,
-                  aid.algorithmReady, aid.podActive, aid.isManual, aid.cgmType == 0 else {
-                throw Stopped(reason: "Pod is not ready, active, Manual, sensor-free and fault-free")
+                  aid.algorithmReady, aid.podActive, aid.isManual, aid.cgmType == 0 || aid.cgmType == 1 else {
+                throw Stopped(reason: "Pod is not ready, active, Manual, sensor-free and fault-free (CGM type \(aid.cgmType))")
             }
+            return aid
         }
         func interface() throws -> O5CgmInterfaceStatus {
             let value = try O5CgmInterfaceStatus(exchange(Data("G4.2".utf8), "4.2="))
@@ -245,8 +249,12 @@ enum O5EarlyControlEnable {
             return value
         }
         do {
-            try status()
+            let first = try status()
             let before = try interface()
+            // Type 1 before the enable is only consistent with control already enabled.
+            guard first.cgmType == 0 || before.control == 0 else {
+                throw Stopped(reason: "CGM type 1 reported while control is not enabled")
+            }
             if before.control != 0 {
                 guard !previouslyVerified else {
                     throw Stopped(reason: "control changed after verification")
