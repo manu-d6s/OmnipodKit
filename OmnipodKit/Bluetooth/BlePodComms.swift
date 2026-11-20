@@ -388,64 +388,64 @@ class BlePodComms: PodComms {
     private func o5SendAidSetupCommands(transport: BlePodMessageTransport) throws {
 
         // Command 1: UTC time
-        log.bleDebug("@@@ O5 AID [1/9]: UtcCommand — setting pod UTC time")
+        log.default("@@@ O5 AID [1/9]: UtcCommand — setting pod UTC time")
         do {
             let (payload, prefix) = O5AidCommands.UtcCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
             try O5AidReplyCheck.extendedSet(response, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [1/9]: UtcCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [1/9]: UtcCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [1/9]: UtcCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 2: TDI (Therapy Delivery Information)
-        log.bleDebug("@@@ O5 AID [2/9]: TdiCommand — setting therapy delivery info")
+        log.default("@@@ O5 AID [2/9]: TdiCommand — setting therapy delivery info")
         do {
             let (payload, prefix) = O5AidCommands.TdiCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
             try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [2/9]: TdiCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [2/9]: TdiCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [2/9]: TdiCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 3: Target BG Profile (48 half-hour targets, all 110 mg/dL)
-        log.bleDebug("@@@ O5 AID [3/9]: TargetBgProfileCommand — setting 48 half-hour BG targets (all 110 mg/dL)")
+        log.default("@@@ O5 AID [3/9]: TargetBgProfileCommand — setting 48 half-hour BG targets (all 110 mg/dL)")
         do {
             let (payload, prefix) = O5AidCommands.TargetBgProfileCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
             try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
-            log.bleDebug("@@@ O5 AID [3/9]: TargetBgProfileCommand response: %{public}d bytes", response.count)
+            log.default("@@@ O5 AID [3/9]: TargetBgProfileCommand response: %{public}d bytes", response.count)
         } catch {
             log.error("@@@ O5 AID [3/9]: TargetBgProfileCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 4: DIA (Duration of Insulin Action)
-        log.bleDebug("@@@ O5 AID [4/9]: DiaCommand — setting DIA=8")
+        log.default("@@@ O5 AID [4/9]: DiaCommand — setting DIA=8")
         do {
             let (payload, prefix) = O5AidCommands.DiaCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
             try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [4/9]: DiaCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [4/9]: DiaCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [4/9]: DiaCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 5: EGV (Estimated Glucose Value config)
-        log.bleDebug("@@@ O5 AID [5/9]: EgvCommand — setting EGV config=3670015")
+        log.default("@@@ O5 AID [5/9]: EgvCommand — setting EGV config=3670015")
         do {
             let (payload, prefix) = O5AidCommands.EgvCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
             try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [5/9]: EgvCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [5/9]: EgvCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [5/9]: EgvCommand failed: %{public}@", String(describing: error))
             throw error
@@ -453,13 +453,13 @@ class BlePodComms: PodComms {
 
         // Commands 6-8: Algorithm Insulin History (3 batches of 24 zero records)
         for batch in 1...3 {
-            log.bleDebug("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistoryCommand batch %{public}d/3", batch + 5, batch)
+            log.default("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistoryCommand batch %{public}d/3", batch + 5, batch)
             do {
                 let (payload, prefix) = O5AidCommands.AlgorithmInsulinHistoryCommand.payload()
                 let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
                 try O5AidReplyCheck.extendedSet(response, responsePrefix: prefix)
                 let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-                log.bleDebug("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 response: %{public}@",
+                log.default("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 response: %{public}@",
                              batch + 5, batch, responseStr)
             } catch {
                 log.error("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 failed: %{public}@",
@@ -473,19 +473,19 @@ class BlePodComms: PodComms {
         // so OK to just skip this command if majorVersion not available.
         let majorVersion = parseMajorVersion(from: podState!.firmwareVersion)
         if skipO5AID9 || majorVersion == nil {
-            log.bleDebug("@@@ O5 AID [9/9]: skipping Pod Status query...")
+            log.default("@@@ O5 AID [9/9]: skipping Pod Status query...")
         } else {
             do {
                 let useGen1AidPodStatus = o5PodIsV1(majorVersion: majorVersion!)
                 if useGen1AidPodStatus {
                     let (payload, prefix) = O5AidCommands.AidPodStatusCommand.payload()
                     let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
-                    log.bleDebug("@@@ O5 AID [9/9]: AidPodStatusCommand (G3.11) response: %d bytes — %{public}@",
+                    log.default("@@@ O5 AID [9/9]: AidPodStatusCommand (G3.11) response: %d bytes — %{public}@",
                              response.count, response.hexadecimalString)
                 } else {
                     let (payload, prefix) = O5AidCommands.UnifiedAidPodStatusCommand.payload()
                     let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
-                    log.bleDebug("@@@ O5 AID [9/9]: UnifiedAidPodStatusCommand (G3.12) response: %d bytes — %{public}@",
+                    log.default("@@@ O5 AID [9/9]: UnifiedAidPodStatusCommand (G3.12) response: %d bytes — %{public}@",
                              response.count, response.hexadecimalString)
                 }
             } catch {
