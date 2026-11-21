@@ -24,7 +24,7 @@ struct O5G7IdentityView: View {
 
     var body: some View {
         List {
-            Section(footer: Text("Sends the sensor identity to the Pod once, the way the Omnipod 5 app adds a G7 to an active Pod. Only for a Pod whose control was enabled during activation. It can't be retried for this Pod, and the Pod may fault.")) {
+            Section(footer: Text("Sends the sensor identity to the Pod once, the way the Omnipod 5 app adds a G7 to an active Pod. Only for a Pod whose control was enabled during activation. Once the identity has been sent it can't be sent again for this Pod, and the Pod may fault.")) {
                 TextField("Pairing code (4 digits)", text: $pairingCode)
                     .keyboardType(.numberPad)
                 TextField("Serial number (12 digits)", text: $serialNumber)
@@ -53,7 +53,7 @@ struct O5G7IdentityView: View {
         .alert(isPresented: $confirming) {
             Alert(
                 title: Text("Send the G7 identity?"),
-                message: Text("This is sent once for this Pod and won't be retried."),
+                message: Text("Once sent, the identity won't be sent again for this Pod."),
                 primaryButton: .destructive(Text("Send")) { start() },
                 secondaryButton: .cancel()
             )

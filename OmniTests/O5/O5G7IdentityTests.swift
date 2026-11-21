@@ -68,9 +68,11 @@ final class O5G7IdentityTests: XCTestCase {
         try O5G7Identity.send(target: target, firmware: "9.0.4", bleFirmware: "5.0.2",
             pairingCode: code, serialNumber: serial, directory: root, send: send, detailedStatus: detailed)
     }
+    /// The phase of the current record (earlier attempts are separate files).
     private func phase() throws -> String? {
-        let json = try XCTUnwrap(try O5G7Identity.record(target: target, directory: root))
-        return (try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["phase"] as? String
+        XCTAssertNotNil(try O5G7Identity.record(target: target, directory: root))
+        let file = root.appendingPathComponent("pod-A-1-2-ble").appendingPathComponent("identity.json")
+        return (try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])?["phase"] as? String
     }
 
     func testSendsTheOfficialBatchOnceAndReadsTheIdentityBack() throws {
@@ -174,5 +176,83 @@ final class O5G7IdentityTests: XCTestCase {
         delivery = 1; cgm = 0
         try sendIdentity()
         XCTAssertEqual(batches.count, 1)
+    }
+
+    // MARK: - A stop before the write allows a new attempt
+
+    private var recordDirectory: URL { root.appendingPathComponent("pod-A-1-2-ble") }
+
+    /// Writes a record as the app would have left it.
+    private func writeRecord(phase: String, exchanges: [(request: Data, prefix: String, response: Data?)]) throws {
+        let record: [String: Any] = [
+            "schema": 1, "target": target, "firmware": "9.0.4", "bleFirmware": "5.0.2",
+            "pairingCode": "1234", "serialNumber": "123456789012", "created": 785_000_000.0,
+            "revisions": [String: String](), "phase": phase, "reason": "Incorrect Response",
+            "exchanges": exchanges.map { e -> [String: Any] in
+                var entry: [String: Any] = ["request": e.request.base64EncodedString(),
+                                            "responsePrefix": e.prefix, "started": 785_000_001.0]
+                if let response = e.response { entry["response"] = response.base64EncodedString() }
+                return entry
+            },
+        ]
+        try FileManager.default.createDirectory(at: recordDirectory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: record).write(to: recordDirectory.appendingPathComponent("identity.json"))
+    }
+
+    func testFailedFirstReadAllowsANewAttempt() throws {
+        var failFirstRead = true
+        XCTAssertThrowsError(try O5G7Identity.send(target: target, firmware: "9.0.4", bleFirmware: "5.0.2",
+            pairingCode: "1234", serialNumber: "123456789012", directory: root,
+            send: { request, prefix in
+                if failFirstRead { failFirstRead = false; throw URLError(.timedOut) }
+                return try self.send(request, prefix)
+            },
+            detailedStatus: detailed))
+        XCTAssertTrue(batches.isEmpty)
+        XCTAssertEqual(try phase(), "stopped")
+
+        try sendIdentity()
+        XCTAssertEqual(batches, [expectedBatch])
+        XCTAssertEqual(try phase(), "stored")
+        let record = try XCTUnwrap(try O5G7Identity.record(target: target, directory: root))
+        XCTAssertTrue(record.contains("Earlier attempt (identity-attempt-"))
+    }
+
+    /// The first attempt on the worn Pod (2026-11-21): the first G3.12 read failed with
+    /// "Incorrect Response" and nothing else was sent.
+    func testCapturedFailedFirstReadAllowsANewAttempt() throws {
+        try writeRecord(phase: "stopped", exchanges: [(Data("G3.12".utf8), "3.12=", nil)])
+        try sendIdentity()
+        XCTAssertEqual(batches.count, 1)
+        XCTAssertEqual(try phase(), "stored")
+    }
+
+    func testCrashDuringTheReadsAllowsANewAttempt() throws {
+        try writeRecord(phase: "checking", exchanges: [(Data("G3.12".utf8), "3.12=", aidStatus()),
+                                                       (Data("G4.2".utf8), "4.2=", nil)])
+        try sendIdentity()
+        XCTAssertEqual(batches.count, 1)
+    }
+
+    func testAnyRecordThatReachedTheBatchStillBlocks() throws {
+        for (phase, response) in [("writePending", nil), ("stopped", Data("0,ES4.1=-18".utf8)),
+                                  ("sent", Data("0,ES4.1=0".utf8)), ("stopped", nil)] as [(String, Data?)] {
+            try? FileManager.default.removeItem(at: recordDirectory)
+            try writeRecord(phase: phase, exchanges: [(Data("G3.12".utf8), "3.12=", aidStatus()),
+                                                      (expectedBatch, "ES4.2=", response)])
+            requests.removeAll()
+            XCTAssertThrowsError(try sendIdentity(), phase)
+            XCTAssertTrue(requests.isEmpty, phase)
+        }
+    }
+
+    func testOtherPhasesWithoutABatchStillBlock() throws {
+        for phase in ["writePending", "sent", "stored", "unknown"] {
+            try? FileManager.default.removeItem(at: recordDirectory)
+            try writeRecord(phase: phase, exchanges: [(Data("G3.12".utf8), "3.12=", aidStatus())])
+            requests.removeAll()
+            XCTAssertThrowsError(try sendIdentity(), phase)
+            XCTAssertTrue(requests.isEmpty, phase)
+        }
     }
 }

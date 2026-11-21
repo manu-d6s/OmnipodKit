@@ -12,10 +12,12 @@ import Foundation
 ///
 /// Only for a Pod whose CGM interface control is already enabled (the early control
 /// enable at activation) and that has no sensor configured. Every exchange is saved to
-/// a per-Pod record before it is sent. Once a record exists the identity is never sent
-/// again for that Pod, whatever the outcome, so a rejected or uncertain attempt can't
-/// be repeated by accident. "stored" means the Pod read the identity back; it doesn't
-/// mean glucose has been received.
+/// a per-Pod record before it is sent. Once an attempt has reached the batch, the identity
+/// is never sent again for that Pod, whatever the outcome, so a rejected or uncertain
+/// attempt can't be repeated by accident. An attempt that stopped before the batch (for
+/// example on a failed status read) changed nothing, so it is kept as evidence and a new
+/// attempt may start. "stored" means the Pod read the identity back; it doesn't mean
+/// glucose has been received.
 enum O5G7Identity {
     private struct Exchange: Codable {
         let request: Data
@@ -40,7 +42,7 @@ enum O5G7Identity {
     struct Stopped: LocalizedError {
         let reason: String
         var errorDescription: String? {
-            "G7 sensor identity stopped: \(reason). It will not be sent again for this Pod. The record is in Pump Manager Details."
+            "G7 sensor identity stopped: \(reason). If the identity had already been sent, it won't be sent again for this Pod. The record is in Pump Manager Details."
         }
     }
 
@@ -91,10 +93,33 @@ enum O5G7Identity {
         try lease.write(O5RecordLease.encode(record))
     }
 
+    /// Earlier attempts that stopped before the write, kept next to the current record.
+    private static func earlierAttempts(_ lease: O5RecordLease) -> [URL] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: lease.directory, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.lastPathComponent.hasPrefix("identity-attempt-") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    /// True when a record shows the batch was never sent: no SET request in its exchanges
+    /// and it never reached writePending. Only such a record may be set aside for a new try.
+    private static func stoppedBeforeTheWrite(_ record: Record) -> Bool {
+        ["checking", "stopped"].contains(record.phase)
+            && !record.exchanges.contains { $0.request.starts(with: Data("SE".utf8)) }
+    }
+
     /// The record as JSON, for diagnostics, or nil if nothing was attempted for this Pod.
+    /// Earlier attempts that stopped before the write follow the current record.
     static func record(target: String, directory: URL? = nil) throws -> String? {
         let lease = try lease(target, directory)
-        return try load(lease).map { String(decoding: try O5RecordLease.encode($0), as: UTF8.self) }
+        var parts: [String] = []
+        if let current = try load(lease) {
+            parts.append(String(decoding: try O5RecordLease.encode(current), as: UTF8.self))
+        }
+        for url in earlierAttempts(lease) {
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "unreadable"
+            parts.append("Earlier attempt (\(url.lastPathComponent)):\n" + text)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
     // MARK: - Send
@@ -110,7 +135,14 @@ enum O5G7Identity {
         do {
             lease = try self.lease(target, directory)
             if let existing = try load(lease) {
-                throw Stopped(reason: "already attempted for this Pod (\(existing.phase))")
+                // An attempt that stopped before the batch changed nothing on the Pod; keep it
+                // as evidence and allow a new one. Any attempt that reached the write blocks for good.
+                guard stoppedBeforeTheWrite(existing) else {
+                    throw Stopped(reason: "already attempted for this Pod (\(existing.phase))")
+                }
+                let stamp = Int(existing.created.timeIntervalSince1970)
+                let archive = lease.directory.appendingPathComponent("identity-attempt-\(stamp).json")
+                try FileManager.default.moveItem(at: lease.file, to: archive)
             }
         } catch let error as Stopped { throw error }
         catch { throw Stopped(reason: "record unavailable: \(error.localizedDescription)") }
