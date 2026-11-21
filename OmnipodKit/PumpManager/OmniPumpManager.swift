@@ -2188,6 +2188,37 @@ extension OmniPumpManager {
         }
     }
 
+    /// Experimental G7 type experiment, step 1. See O5G7TypeExperiment.
+    func setO5G7DesiredType() async throws -> String {
+        try await runO5Experiment(withName: "Set O5 G7 Desired Type") { try $0.setO5G7DesiredType() }
+    }
+
+    /// Experimental G7 type experiment, step 2. See O5G7TypeExperiment.
+    func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) async throws -> String {
+        try await runO5Experiment(withName: "Send O5 G7 Identity Batch") {
+            try $0.sendO5G7IdentityBatchAfterType(pairingCode: pairingCode, serialNumber: serialNumber)
+        }
+    }
+
+    private func runO5Experiment(withName name: String, _ block: @escaping (PodCommsSession) throws -> String) async throws -> String {
+        guard self.hasActivePod else {
+            throw OmniPumpManagerError.noPodPaired
+        }
+        guard state.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "This is only available for an Omnipod 5 Pod")
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.runSession(withName: name) { (result) in
+                switch result {
+                case .success(let session):
+                    continuation.resume(with: Result { try block(session) })
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func readTriggeredAlerts() async throws -> String {
         // use hasSetupPod here instead of hasActivePod as PodInfo can be read with a faulted Pod
         guard self.hasSetupPod else {

@@ -24,6 +24,8 @@ protocol DiagnosticCommands {
     var isO5Pod: Bool { get }
     func readO5CgmStatus() async throws -> String
     func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String
+    func setO5G7DesiredType() async throws -> String
+    func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) async throws -> String
 }
 
 struct PodDiagnosticsView: View  {
@@ -58,6 +60,16 @@ struct PodDiagnosticsView: View  {
                     try await diagnosticCommands.sendO5G7Identity(pairingCode: code, serialNumber: serial)
                 })) {
                     FrameworkLocalText("Experimental: Send G7 Identity", comment: "Text for the experimental send G7 identity navigation link")
+                        .foregroundColor(Color.primary)
+                }
+                .disabled(!podOk)
+
+                NavigationLink(destination: O5G7TypeExperimentView(
+                    setType: { try await diagnosticCommands.setO5G7DesiredType() },
+                    sendBatch: { code, serial in
+                        try await diagnosticCommands.sendO5G7IdentityBatchAfterType(pairingCode: code, serialNumber: serial)
+                    })) {
+                    FrameworkLocalText("Experimental: G7 Type, Then Identity", comment: "Text for the experimental G7 type experiment navigation link")
                         .foregroundColor(Color.primary)
                 }
                 .disabled(!podOk)

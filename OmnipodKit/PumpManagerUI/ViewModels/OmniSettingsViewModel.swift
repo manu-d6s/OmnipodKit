@@ -722,7 +722,16 @@ extension OmniPumpManager: DiagnosticCommands {
                 g7Record = "G7 identity record unavailable: \(error.localizedDescription)"
             }
         }
+        var typeRecord = "The G7 type experiment was not run on this Pod"
+        if let pod {
+            do {
+                if let json = try O5G7TypeExperiment.record(target: pod.earlyControlTarget) { typeRecord = json }
+            } catch {
+                typeRecord = "G7 type experiment record unavailable: \(error.localizedDescription)"
+            }
+        }
         return debugDescription + "\n\nEarly control enable activation record:\n" + record
             + "\n\nG7 identity record:\n" + g7Record
+            + "\n\nG7 type experiment records:\n" + typeRecord
     }
 }

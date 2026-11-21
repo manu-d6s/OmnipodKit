@@ -1072,6 +1072,33 @@ class PodCommsSession: MessageTransportDelegate {
             detailedStatus: { try self.getDetailedStatus().data })
     }
 
+    /// Experimental G7 type experiment, step 1: write desired sensor type 7. See O5G7TypeExperiment.
+    func setO5G7DesiredType() throws -> String {
+        try checkO5ExperimentPod()
+        return try O5G7TypeExperiment.setDesiredType(target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    /// Experimental G7 type experiment, step 2: the identity batch. See O5G7TypeExperiment.
+    func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) throws -> String {
+        try checkO5ExperimentPod()
+        return try O5G7TypeExperiment.sendIdentityBatch(target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+            pairingCode: pairingCode, serialNumber: serialNumber,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    private func checkO5ExperimentPod() throws {
+        assertOnSessionQueue()
+        guard podState.podType.isO5, podState.setupProgress == .completed, podState.fault == nil,
+              podState.unacknowledgedCommand == nil else {
+            throw PodCommsError.diagnosticMessage(str: "This needs an active Omnipod 5 Pod with completed setup, no fault and no pending command")
+        }
+    }
+
     /// Sends an O5 AID command (see O5AidCommands) and returns the reply body after its prefix.
     func sendO5AidCommand(_ command: (data: Data, responsePrefix: String)) throws -> Data {
         guard let bleTransport = transport as? BlePodMessageTransport, podState.podType.isO5 else {
