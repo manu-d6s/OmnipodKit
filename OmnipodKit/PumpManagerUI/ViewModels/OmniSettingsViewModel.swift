@@ -706,7 +706,32 @@ extension OmniPumpManager {
 }
 
 extension OmniPumpManager: DiagnosticCommands {
+    var isO5Pod: Bool { state.podType.isO5 }
+
     func pumpManagerDetails() -> String {
-        return debugDescription
+        let record: String
+        let pod = state.podState ?? state.previousPodState
+        if let id = pod?.earlyControlEnableID {
+            record = (try? O5EarlyControlEnable.record(id: id)) ?? "Activation record unavailable; no operation resumed"
+        } else { record = "Early control enable was not armed for this Pod" }
+        var g7Record = "No G7 identity was sent to this Pod"
+        if let pod {
+            do {
+                if let json = try O5G7Identity.record(target: pod.earlyControlTarget) { g7Record = json }
+            } catch {
+                g7Record = "G7 identity record unavailable: \(error.localizedDescription)"
+            }
+        }
+        var typeRecord = "The G7 type experiment was not run on this Pod"
+        if let pod {
+            do {
+                if let json = try O5G7TypeExperiment.record(target: pod.earlyControlTarget) { typeRecord = json }
+            } catch {
+                typeRecord = "G7 type experiment record unavailable: \(error.localizedDescription)"
+            }
+        }
+        return debugDescription + "\n\nEarly control enable activation record:\n" + record
+            + "\n\nG7 identity record:\n" + g7Record
+            + "\n\nG7 type experiment records:\n" + typeRecord
     }
 }

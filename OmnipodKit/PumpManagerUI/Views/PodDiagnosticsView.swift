@@ -21,6 +21,11 @@ protocol DiagnosticCommands {
     func readTriggeredAlerts() async throws -> String
     func getDetailedStatus() async throws -> DetailedStatus
     func pumpManagerDetails() -> String
+    var isO5Pod: Bool { get }
+    func readO5CgmStatus() async throws -> String
+    func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String
+    func setO5G7DesiredType() async throws -> String
+    func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) async throws -> String
 }
 
 struct PodDiagnosticsView: View  {
@@ -38,6 +43,37 @@ struct PodDiagnosticsView: View  {
                     .foregroundColor(Color.primary)
             }
             .disabled(noPod)
+
+            if diagnosticCommands.isO5Pod {
+                NavigationLink(destination: ReadPodInfoView(
+                    title: LocalizedString("Read O5 CGM Status", comment: "Text for read O5 CGM status title"),
+                    actionString: LocalizedString("Reading O5 CGM Status...", comment: "Text for read O5 CGM status action"),
+                    failedString: LocalizedString("Failed to read O5 CGM status", comment: "Alert title for error when reading O5 CGM status"),
+                    action: { try await diagnosticCommands.readO5CgmStatus() }))
+                {
+                    FrameworkLocalText("Read O5 CGM Status", comment: "Text for read O5 CGM status navigation link")
+                        .foregroundColor(Color.primary)
+                }
+                .disabled(noPod)
+
+                NavigationLink(destination: O5G7IdentityView(send: { code, serial in
+                    try await diagnosticCommands.sendO5G7Identity(pairingCode: code, serialNumber: serial)
+                })) {
+                    FrameworkLocalText("Experimental: Send G7 Identity", comment: "Text for the experimental send G7 identity navigation link")
+                        .foregroundColor(Color.primary)
+                }
+                .disabled(!podOk)
+
+                NavigationLink(destination: O5G7TypeExperimentView(
+                    setType: { try await diagnosticCommands.setO5G7DesiredType() },
+                    sendBatch: { code, serial in
+                        try await diagnosticCommands.sendO5G7IdentityBatchAfterType(pairingCode: code, serialNumber: serial)
+                    })) {
+                    FrameworkLocalText("Experimental: G7 Type, Then Identity", comment: "Text for the experimental G7 type experiment navigation link")
+                        .foregroundColor(Color.primary)
+                }
+                .disabled(!podOk)
+            }
 
             NavigationLink(destination: PlayTestBeepsView(playTestBeeps: {
                 try await diagnosticCommands.playTestBeeps()
