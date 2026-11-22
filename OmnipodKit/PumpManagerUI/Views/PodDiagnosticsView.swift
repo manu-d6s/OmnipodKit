@@ -22,6 +22,7 @@ protocol DiagnosticCommands {
     func getDetailedStatus() async throws -> DetailedStatus
     func pumpManagerDetails() -> String
     var isO5Pod: Bool { get }
+    var podDataLogURL: URL? { get }
     func readO5CgmStatus() async throws -> String
     func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String
     func setO5G7DesiredType() async throws -> String
@@ -35,6 +36,8 @@ struct PodDiagnosticsView: View  {
     var diagnosticCommands: DiagnosticCommands
     var podOk: Bool
     var noPod: Bool
+
+    @AppStorage(O5PodDataLog.enabledKey) private var podDataLogEnabled = false
 
     var body: some View {
         List {
@@ -55,6 +58,13 @@ struct PodDiagnosticsView: View  {
                         .foregroundColor(Color.primary)
                 }
                 .disabled(noPod)
+
+                Toggle("Research: Log Pod Data", isOn: $podDataLogEnabled)
+                if let url = diagnosticCommands.podDataLogURL {
+                    ShareLink(item: url) {
+                        Text("Share Pod Data Log").foregroundColor(Color.primary)
+                    }
+                }
 
                 NavigationLink(destination: O5G7IdentityView(send: { code, serial in
                     try await diagnosticCommands.sendO5G7Identity(pairingCode: code, serialNumber: serial)
