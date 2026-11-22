@@ -1788,6 +1788,10 @@ extension OmniPumpManager {
                 case .success(let session):
                     let status = self.handlePodUpdatesAsNeeded(session: session, canOptimize: canOptimize)
                     completion?(.success(status))
+                    // After the completion, so a slow or failed read never delays the caller.
+                    if status != nil {
+                        session.logO5AidStatusIfEnabled()
+                    }
                 case .failure(let error):
                     self.evaluateStatus()
                     throw error

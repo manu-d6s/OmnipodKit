@@ -335,6 +335,60 @@ class PodCommsSession: MessageTransportDelegate {
     ///     - PodCommsError.noResponseRL
     ///     - RileyLinkDeviceError
     func send<T: MessageBlock>(_ messageBlocks: [MessageBlock], beepBlock: MessageBlock? = nil, expectFollowOnMessage: Bool = false) throws -> T {
+        guard O5PodDataLog.isEnabled else {
+            return try sendUnlogged(messageBlocks, beepBlock: beepBlock, expectFollowOnMessage: expectFollowOnMessage)
+        }
+        let commands = O5PodDataLog.commandFields(messageBlocks)
+        do {
+            let response: T = try sendUnlogged(messageBlocks, beepBlock: beepBlock, expectFollowOnMessage: expectFollowOnMessage)
+            if commands != nil || response is StatusResponse {
+                var entry: [String: Any] = ["kind": commands != nil ? "command" : "status"]
+                if let commands { entry["commands"] = commands }
+                if let status = response as? StatusResponse {
+                    entry["status"] = O5PodDataLog.statusFields(status)
+                }
+                appendPodDataLog(entry)
+            }
+            return response
+        } catch {
+            if let commands {
+                appendPodDataLog(["kind": "command", "commands": commands, "error": String(describing: error)])
+            }
+            throw error
+        }
+    }
+
+    private func appendPodDataLog(_ entry: [String: Any]) {
+        let pod = podState
+        O5PodDataLog.append(target: pod.earlyControlTarget, header: [
+            "podType": String(describing: pod.podType),
+            "firmware": pod.firmwareVersion,
+            "bleFirmware": pod.iFirmwareVersion,
+            "activatedAt": pod.activatedAt.map { O5PodDataLog.timestamp($0) as Any } ?? NSNull(),
+            "earlyControlEnable": pod.earlyControlEnableID != nil,
+            "earlyControlDesiredSensorType": pod.earlyControlDesiredSensorType.map { Int($0) as Any } ?? NSNull(),
+            "setup": ["tdi": O5AidCommands.TdiCommand.payload().0.hexadecimalString,
+                      "dia": O5AidCommands.DiaCommand.payload().0.hexadecimalString,
+                      "egvThresholds": O5AidCommands.EgvCommand.payload().0.hexadecimalString,
+                      "note": "targets 48 x 110 mg/dL; insulin history 72 zero records"],
+        ], entry: entry)
+    }
+
+    /// Research logging: one `G3.12` read for the Pod data log, after a fetched pump status.
+    /// Skipped unless logging is on, the Pod is an active O5 and no command is pending.
+    /// Failures are logged and never thrown.
+    func logO5AidStatusIfEnabled() {
+        guard O5PodDataLog.isEnabled, podState.podType.isO5, podState.setupProgress == .completed,
+              podState.fault == nil, podState.unacknowledgedCommand == nil else { return }
+        do {
+            let reply = try sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
+            appendPodDataLog(O5PodDataLog.aidStatusFields(reply))
+        } catch {
+            appendPodDataLog(["kind": "aidStatus", "error": String(describing: error)])
+        }
+    }
+
+    private func sendUnlogged<T: MessageBlock>(_ messageBlocks: [MessageBlock], beepBlock: MessageBlock? = nil, expectFollowOnMessage: Bool = false) throws -> T {
 
         var triesRemaining = 2  // Retries only happen for nonce resync
         var blocksToSend = messageBlocks

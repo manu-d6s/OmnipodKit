@@ -708,6 +708,14 @@ extension OmniPumpManager {
 extension OmniPumpManager: DiagnosticCommands {
     var isO5Pod: Bool { state.podType.isO5 }
 
+    /// The current Pod's research data log, if one has been written.
+    var podDataLogURL: URL? {
+        guard let pod = state.podState,
+              let url = try? O5PodDataLog.fileURL(target: pod.earlyControlTarget),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
     func pumpManagerDetails() -> String {
         let record: String
         let pod = state.podState ?? state.previousPodState
