@@ -113,6 +113,8 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     var primeFinishTime: Date?
     // Only fresh pairing can arm this experiment. Older persisted Pods default to nil.
     var earlyControlEnableID: String? = nil
+    // Set with earlyControlEnableID when the activation also sets desired sensor type G7.
+    var earlyControlDesiredSensorType: UInt8? = nil
 
     var earlyControlTarget: String {
         "\(address):\(lotNo):\(lotSeq):\(bleIdentifier ?? "missing")"
@@ -152,6 +154,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         insulinType: InsulinType,
         podType: PodType,
         earlyControlEnableID: String? = nil,
+        earlyControlDesiredSensorType: UInt8? = nil,
 
         // BLE specific variables
         bleMessageTransportState: BleMessageTransportState? = nil,
@@ -173,6 +176,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.insulinType = insulinType
         self.podType = podType
         self.earlyControlEnableID = earlyControlEnableID
+        self.earlyControlDesiredSensorType = earlyControlEnableID == nil ? nil : earlyControlDesiredSensorType
 
         self.setupUnitsDelivered = setupUnitsDelivered // can be non-zero with simulator
         self.lastDeliveryStatusReceived = initialDeliveryStatus // can be non-nil when testing
@@ -544,6 +548,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         }
 
         self.earlyControlEnableID = rawValue["earlyControlEnableID"] as? String
+        self.earlyControlDesiredSensorType = (rawValue["earlyControlDesiredSensorType"] as? Int).map { UInt8(clamping: $0) }
 
         if let setupUnitsDelivered = rawValue["setupUnitsDelivered"] as? Double {
             self.setupUnitsDelivered = setupUnitsDelivered
@@ -733,6 +738,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         ]
 
         rawValue["earlyControlEnableID"] = earlyControlEnableID
+        rawValue["earlyControlDesiredSensorType"] = earlyControlDesiredSensorType.map { Int($0) }
         rawValue["podType"] = podType.rawValue
         rawValue["unacknowledgedCommand"] = unacknowledgedCommand?.rawValue
         rawValue["unfinalizedBolus"] = unfinalizedBolus?.rawValue

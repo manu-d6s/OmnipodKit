@@ -80,9 +80,11 @@ final class O5G7TypeExperimentTests: XCTestCase {
             directory: root, send: send, detailedStatus: detailed)
     }
     @discardableResult
-    private func sendBatch(code: String = "1234", serial: String = "123456789012") throws -> String {
+    private func sendBatch(code: String = "1234", serial: String = "123456789012",
+                           typeSetAtActivation: Bool = false) throws -> String {
         try O5G7TypeExperiment.sendIdentityBatch(target: target, firmware: "9.0.4", bleFirmware: "5.0.2",
-            pairingCode: code, serialNumber: serial, directory: root, send: send, detailedStatus: detailed)
+            pairingCode: code, serialNumber: serial, typeSetAtActivation: typeSetAtActivation,
+            directory: root, send: send, detailedStatus: detailed)
     }
     private func phase(_ file: String) throws -> String? {
         let url = root.appendingPathComponent("pod-A-1-2-ble").appendingPathComponent(file)
@@ -229,5 +231,25 @@ final class O5G7TypeExperimentTests: XCTestCase {
         XCTAssertThrowsError(try sendBatch(serial: "1"))
         XCTAssertTrue(requests.isEmpty)
         XCTAssertNil(try phase("batch.json"))
+    }
+
+    // MARK: - Desired type set at activation
+
+    func testBatchRunsWithoutStepOneWhenTheTypeWasSetAtActivation() throws {
+        desired = 7
+        try sendBatch(typeSetAtActivation: true)
+        XCTAssertEqual(writes, [batch])
+        XCTAssertNil(try phase("type.json"))
+        XCTAssertEqual(try phase("batch.json"), "stored")
+    }
+    func testBatchStillRefusesWithoutStepOneOrActivationType() throws {
+        desired = 7
+        XCTAssertThrowsError(try sendBatch())
+        XCTAssertTrue(requests.isEmpty)
+    }
+    func testActivationTypeStillRequiresTypeSevenOnThePod() throws {
+        desired = 0
+        XCTAssertThrowsError(try sendBatch(typeSetAtActivation: true))
+        XCTAssertTrue(writes.isEmpty)
     }
 }

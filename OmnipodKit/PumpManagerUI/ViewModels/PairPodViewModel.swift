@@ -148,7 +148,14 @@ class PairPodViewModel: ObservableObject, Identifiable {
     }
 
     @Published var earlyControlEnable = false {
-        didSet { podPairer.earlyControlEnableForNextPod = earlyControlEnable }
+        didSet {
+            podPairer.earlyControlEnableForNextPod = earlyControlEnable
+            if !earlyControlEnable { earlyControlG7Type = false }
+        }
+    }
+
+    @Published var earlyControlG7Type = false {
+        didSet { podPairer.earlyControlG7TypeForNextPod = earlyControlG7Type }
     }
 
     @Published var state: PairPodViewModelState = .ready
@@ -190,6 +197,7 @@ class PairPodViewModel: ObservableObject, Identifiable {
         self.podPairer = podPairer
         self.autoRetryAttempted = false
         self.earlyControlEnable = podPairer.earlyControlEnableForNextPod
+        self.earlyControlG7Type = podPairer.earlyControlG7TypeForNextPod
         // If resuming, don't wait for the button action
         if podPairer.podCommState == .activating {
             pairAndPrime()
@@ -319,6 +327,7 @@ enum OmniPairingError : LocalizedError {
 
 protocol PodPairer {
     var earlyControlEnableForNextPod: Bool { get set }
+    var earlyControlG7TypeForNextPod: Bool { get set }
     func pairAndPrimePod(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void)
     func discardPod(completion: @escaping (Bool) -> ())
     var podCommState: PodCommState { get }
@@ -335,6 +344,10 @@ extension OmniPumpManager: PodPairer {
 
 extension PodPairer {
     var earlyControlEnableForNextPod: Bool {
+        get { false }
+        set { }
+    }
+    var earlyControlG7TypeForNextPod: Bool {
         get { false }
         set { }
     }

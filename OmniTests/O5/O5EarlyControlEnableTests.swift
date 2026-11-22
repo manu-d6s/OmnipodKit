@@ -25,6 +25,9 @@ final class O5EarlyControlEnableTests: XCTestCase {
     private var interfaceHook: (() throws -> Void)?
     private var ignoreWrite = false
     private var afterWrite: (() -> Void)?
+    private var expectedWrite = Data("SE4.2=".utf8) + Data([0, 2, 4, 0])
+    private var typeApplies = true
+    private var sensorInfo = Data([0, 0])
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -54,14 +57,22 @@ final class O5EarlyControlEnableTests: XCTestCase {
         case "G4.2":
             try interfaceHook?()
             return interface()
+        case "G4.1": return sensorInfo
         default:
-            XCTAssertEqual(request, Data("SE4.2=".utf8) + Data([0, 2, 4, 0]))
+            XCTAssertEqual(request, expectedWrite)
             XCTAssertEqual(prefix, "ES4.2=")
             XCTAssertEqual(try snapshot()["phase"] as? String, "writePending")
             let entries = try XCTUnwrap(snapshot()["exchanges"] as? [[String: Any]])
             XCTAssertNil(entries.last?["response"])
             try mutationHook?()
-            if !ignoreWrite { control = 0 }
+            if !ignoreWrite {
+                if request.suffix(2) == Data([1, 7]) {
+                    if typeApplies { desired = 7 }
+                    if request.count == 12 { control = 0 } // control and type together
+                } else {
+                    control = 0
+                }
+            }
             afterWrite?()
             return Data((reject ?? "0").utf8)
         }
@@ -280,4 +291,91 @@ final class O5EarlyControlEnableTests: XCTestCase {
         XCTAssertEqual(writes.count, 1)
     }
 
+
+    // MARK: - With desired sensor type G7
+
+    private func armG7() throws {
+        id = UUID().uuidString
+        try O5EarlyControlEnable.arm(id: id, target: "pod-A", firmware: "9.0.4", bleFirmware: "5.0.2",
+                                     desiredSensorType: 7, directory: root)
+    }
+    private var g7Requests: [String] {
+        requests.filter { $0.first != 83 }.map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    func testInterfaceRequestMatchesTheOfficialFieldOrder() {
+        XCTAssertEqual(O5EarlyControlEnable.interfaceRequest(enableControl: true, desiredSensorType: 7),
+                       Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7]))
+        XCTAssertEqual(O5EarlyControlEnable.interfaceRequest(enableControl: false, desiredSensorType: 7),
+                       Data("SE4.2=".utf8) + Data([0, 2, 1, 7]))
+        XCTAssertEqual(O5EarlyControlEnable.interfaceRequest(enableControl: true, desiredSensorType: nil),
+                       O5EarlyControlEnable.enableRequest)
+    }
+    func testG7WritesControlAndTypeTogetherOnce() throws {
+        try armG7()
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+        try finish()
+        XCTAssertEqual(writes, [expectedWrite])
+        XCTAssertEqual(g7Requests, ["G3.12", "G4.2", "G4.2", "G4.1", "G3.12"])
+        XCTAssertEqual((control, desired), (0, 7))
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+        XCTAssertEqual(try O5EarlyControlEnable.verifiedDesiredSensorType(id: id, target: "pod-A",
+            firmware: "9.0.4", bleFirmware: "5.0.2", directory: root), 7)
+    }
+    func testG7WithControlAlreadyEnabledWritesOnlyTheType() throws {
+        try armG7()
+        control = 0
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 2, 1, 7])
+        try finish()
+        XCTAssertEqual(writes, [expectedWrite])
+        XCTAssertEqual(desired, 7)
+    }
+    func testG7AlreadySetSkipsTheWrite() throws {
+        try armG7()
+        control = 0; desired = 7; cgm = 1
+        try finish()
+        XCTAssertTrue(writes.isEmpty)
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+    }
+    func testG7AcceptsCgmTypeSevenAfterTheWrite() throws {
+        try armG7()
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+        afterWrite = { self.cgm = 7 }
+        try finish()
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+    }
+    func testControlOnlyStillStopsOnCgmTypeSeven() throws {
+        afterWrite = { self.cgm = 7 }
+        XCTAssertThrowsError(try finish())
+        XCTAssertEqual(writes.count, 1)
+        XCTAssertEqual(try snapshot()["phase"] as? String, "stopped")
+    }
+    func testG7StopsWhenTheTypeDoesNotReadBack() throws {
+        try armG7()
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+        typeApplies = false
+        XCTAssertThrowsError(try finish())
+        XCTAssertEqual(writes.count, 1)
+        XCTAssertEqual(try snapshot()["phase"] as? String, "stopped")
+        requests.removeAll()
+        XCTAssertThrowsError(try finish())
+        XCTAssertTrue(requests.isEmpty)
+    }
+    func testG7StopsWhenSensorInfoIsPresent() throws {
+        try armG7()
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+        let body = Data([0, 0, 0, 0, 0x0f, 1, 7, 2]) + Data("1234".utf8) + Data([3]) + Data("123456789012".utf8)
+        sensorInfo = Data([0, UInt8(body.count)]) + body
+        XCTAssertThrowsError(try finish())
+        XCTAssertEqual(try snapshot()["phase"] as? String, "stopped")
+    }
+    func testOnlyG7CanBeArmed() {
+        XCTAssertThrowsError(try O5EarlyControlEnable.arm(id: UUID().uuidString, target: "pod-A", firmware: "9.0.4",
+            bleFirmware: "5.0.2", desiredSensorType: 4, directory: root))
+    }
+    func testControlOnlyRecordReportsNoDesiredType() throws {
+        try finish()
+        XCTAssertNil(try O5EarlyControlEnable.verifiedDesiredSensorType(id: id, target: "pod-A",
+            firmware: "9.0.4", bleFirmware: "5.0.2", directory: root))
+    }
 }
