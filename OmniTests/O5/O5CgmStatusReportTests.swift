@@ -28,8 +28,8 @@ final class O5CgmStatusReportTests: XCTestCase {
         XCTAssertEqual(try O5CgmInterfaceStatus(interfaceAfterEnable).control, 0)
 
         let text = O5CgmStatusReport.text(status: statusAfterEnable, interface: interfaceAfterEnable, sensor: emptySensorInfo)
-        XCTAssertTrue(text.contains("CGM type: 1 (any)"))
-        XCTAssertTrue(text.contains("Glucose: none (-9)"))
+        XCTAssertTrue(text.contains("CGM type: 1 (no information)"))
+        XCTAssertTrue(text.contains("Glucose: none (-9, no transmitter identity)"))
         XCTAssertTrue(text.contains("Control: 0 (enabled)"))
         XCTAssertTrue(text.contains("No sensor configured"))
     }

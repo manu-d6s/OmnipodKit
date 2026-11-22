@@ -20,7 +20,7 @@ enum O5CgmStatusReport {
                 let age = s.egvAge.map { " (\(Int($0)) s old)" } ?? ""
                 lines.append("Glucose: \(egv) mg/dL\(age)")
             } else {
-                lines.append("Glucose: none (\(s.egvRaw))")
+                lines.append("Glucose: none (\(s.egvRaw)\(s.egvRaw == -9 ? ", no transmitter identity" : ""))")
             }
             if let g7 = s.g7 {
                 lines.append("G7 algorithm state: \(g7.algorithmState), transmitter status: \(g7.transmitterStatus)")
@@ -72,7 +72,7 @@ enum O5CgmStatusReport {
     static func cgmTypeName(_ type: UInt8) -> String {
         switch type {
         case 0: return "0 (none)"
-        case 1: return "1 (any)"
+        case 1: return "1 (no information)"
         case 4: return "4 (G6)"
         case 7: return "7 (G7)"
         default: return "\(type)"
