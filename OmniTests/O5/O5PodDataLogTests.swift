@@ -15,6 +15,7 @@ final class O5PodDataLogTests: XCTestCase {
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     private func lines(_ target: String) throws -> [[String: Any]] {
+        O5PodDataLog.flush()
         let text = try String(contentsOf: O5PodDataLog.fileURL(target: target, directory: root), encoding: .utf8)
         return try text.split(separator: "\n").map {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
@@ -34,6 +35,7 @@ final class O5PodDataLogTests: XCTestCase {
 
     func testEmptyTargetWritesNothing() throws {
         O5PodDataLog.append(target: "", header: [:], entry: ["kind": "status"], directory: root)
+        O5PodDataLog.flush()
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 

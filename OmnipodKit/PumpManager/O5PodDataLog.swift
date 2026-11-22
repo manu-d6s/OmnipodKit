@@ -13,6 +13,8 @@ import os.log
 enum O5PodDataLog {
     static let enabledKey = "O5PodDataLog.enabled"
     private static let log = OSLog(category: "O5PodDataLog")
+    // All file work happens here, off the Pod session queue.
+    private static let queue = DispatchQueue(label: "O5PodDataLog", qos: .utility)
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: enabledKey) }
@@ -29,16 +31,28 @@ enum O5PodDataLog {
         return try (directory ?? self.directory()).appendingPathComponent("\(name).jsonl")
     }
 
-    /// Appends one entry. The first entry for a Pod is preceded by `header`.
-    static func append(target: String, header: @autoclosure () -> [String: Any], entry: [String: Any],
+    /// Queues one entry for writing and returns immediately. The first entry for a Pod is
+    /// preceded by `header`. The caller only builds the values; serializing and writing
+    /// happen on a background queue.
+    static func append(target: String, header: [String: Any], entry: [String: Any],
                        directory: URL? = nil, now: Date = Date()) {
         guard !target.isEmpty else { return }
+        queue.async { write(target: target, header: header, entry: entry, directory: directory, now: now) }
+    }
+
+    /// Waits until queued entries are written. For tests and before sharing the file.
+    static func flush() {
+        queue.sync {}
+    }
+
+    private static func write(target: String, header: [String: Any], entry: [String: Any],
+                              directory: URL?, now: Date) {
         do {
             let url = try fileURL(target: target, directory: directory)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             var lines = Data()
             if !FileManager.default.fileExists(atPath: url.path) {
-                lines += try line(["kind": "header", "phoneTime": timestamp(now)].merging(header()) { a, _ in a })
+                lines += try line(["kind": "header", "phoneTime": timestamp(now)].merging(header) { a, _ in a })
             }
             lines += try line(["phoneTime": timestamp(now)].merging(entry) { a, _ in a })
             if let handle = try? FileHandle(forWritingTo: url) {

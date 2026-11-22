@@ -710,6 +710,7 @@ extension OmniPumpManager: DiagnosticCommands {
 
     /// The current Pod's research data log, if one has been written.
     var podDataLogURL: URL? {
+        O5PodDataLog.flush()
         guard let pod = state.podState,
               let url = try? O5PodDataLog.fileURL(target: pod.earlyControlTarget),
               FileManager.default.fileExists(atPath: url.path) else { return nil }
