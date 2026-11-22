@@ -317,7 +317,8 @@ final class O5EarlyControlEnableTests: XCTestCase {
         try finish()
         XCTAssertEqual(writes, [expectedWrite])
         XCTAssertEqual(g7Requests, ["G3.12", "G4.2", "G4.2", "G4.1", "G3.12"])
-        XCTAssertEqual((control, desired), (0, 7))
+        XCTAssertEqual(control, 0)
+        XCTAssertEqual(desired, 7)
         XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
         XCTAssertEqual(try O5EarlyControlEnable.verifiedDesiredSensorType(id: id, target: "pod-A",
             firmware: "9.0.4", bleFirmware: "5.0.2", directory: root), 7)
