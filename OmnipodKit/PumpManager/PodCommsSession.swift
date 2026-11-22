@@ -1084,9 +1084,15 @@ class PodCommsSession: MessageTransportDelegate {
     /// Experimental G7 type experiment, step 2: the identity batch. See O5G7TypeExperiment.
     func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) throws -> String {
         try checkO5ExperimentPod()
+        var typeSetAtActivation = false
+        if let id = podState.earlyControlEnableID, podState.earlyControlDesiredSensorType == 7 {
+            typeSetAtActivation = (try? O5EarlyControlEnable.verifiedDesiredSensorType(id: id,
+                target: podState.earlyControlTarget, firmware: podState.firmwareVersion,
+                bleFirmware: podState.iFirmwareVersion)) == 7
+        }
         return try O5G7TypeExperiment.sendIdentityBatch(target: podState.earlyControlTarget,
             firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
-            pairingCode: pairingCode, serialNumber: serialNumber,
+            pairingCode: pairingCode, serialNumber: serialNumber, typeSetAtActivation: typeSetAtActivation,
             send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
             detailedStatus: { try self.getDetailedStatus().data })
     }

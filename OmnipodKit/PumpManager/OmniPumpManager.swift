@@ -1321,6 +1321,21 @@ extension OmniPumpManager {
         }
     }
 
+    /// With the early control enable, also set desired sensor type G7 at activation.
+    var earlyControlG7TypeForNextPod: Bool {
+        get {
+            guard state.podType.isO5 else { return false }
+            if let pod = state.podState { return pod.earlyControlDesiredSensorType == 7 }
+            return state.earlyControlG7TypeForNextPod
+        }
+        set {
+            setState { state in
+                guard state.podState == nil, state.podType.isO5 else { return }
+                state.earlyControlG7TypeForNextPod = newValue
+            }
+        }
+    }
+
     // Called on the main thread
     func pairAndPrime(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
 
@@ -1419,7 +1434,8 @@ extension OmniPumpManager {
         // Common code that invokes blePairAndSetupPod and then a primingSession if successful
         func blePairSetupPrimePod(blePodComms: BlePodComms) {
             blePodComms.blePairAndSetupPod(timeZone: .currentFixed, insulinType: insulinType, messageLogger: self,
-                earlyControlEnable: self.earlyControlEnableForNextPod) { (result) in
+                earlyControlEnable: self.earlyControlEnableForNextPod,
+                earlyControlG7Type: self.earlyControlEnableForNextPod && self.earlyControlG7TypeForNextPod) { (result) in
                 switch result {
                 case .success:
                     // Calls completion
@@ -3491,6 +3507,7 @@ extension OmniPumpManager: PodCommsDelegate {
 
                 state.updatePodStateFromPodComms(podState)
                 state.earlyControlEnableForNextPod = false
+                state.earlyControlG7TypeForNextPod = false
 
                 return (newFault, oldAlerts, newAlerts)
             }

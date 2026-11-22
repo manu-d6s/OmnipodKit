@@ -6,8 +6,12 @@
 import Foundation
 
 /// Experimental, opt-in: enable the O5 Pod's CGM interface control once, right after
-/// cannula insertion, while the Pod stays in Manual mode. No sensor type or identity
-/// is sent. The caller owns the serialized Pod session; this never repeats setup.
+/// cannula insertion, while the Pod stays in Manual mode. The caller owns the serialized
+/// Pod session; this never repeats setup.
+///
+/// With `desiredSensorType` 7 it also sets desired sensor type G7, as the official app
+/// does when a Pod is activated with G7 selected: it reads `4.2` and writes only the
+/// fields that differ. No sensor identity is sent; that is a separate step.
 ///
 /// Every exchange is written to a durable per-Pod activation record before it is
 /// sent. A missing, unreadable or interrupted record stops all further automatic
@@ -33,6 +37,8 @@ enum O5EarlyControlEnable {
         var phase: String
         var exchanges: [Exchange] = []
         var reason: String?
+        // nil: control only. 7: control and desired sensor type G7.
+        var desiredSensorType: UInt8?
     }
     struct Stopped: LocalizedError {
         let reason: String
@@ -43,6 +49,15 @@ enum O5EarlyControlEnable {
 
     static let enableRequest = Data("SE4.2=".utf8) + Data([0, 2, 4, 0])
     static let enableResponsePrefix = "ES4.2="
+
+    /// The `4.2` write for the fields that differ: control (key 4) = 0 and/or desired
+    /// sensor type (key 1). Both together are `00 04 04 00 01 07`.
+    static func interfaceRequest(enableControl: Bool, desiredSensorType: UInt8?) -> Data {
+        var pairs: [UInt8] = []
+        if enableControl { pairs += [4, 0] }
+        if let desiredSensorType { pairs += [1, desiredSensorType] }
+        return Data("SE4.2=".utf8) + Data([0, UInt8(pairs.count)] + pairs)
+    }
 
     // MARK: - Activation record storage (O5RecordLease)
 
@@ -70,14 +85,18 @@ enum O5EarlyControlEnable {
     /// Called only when a fresh PodState is created. The identifier must already be
     /// persisted in that PodState. A missing record is never recreated later.
     static func arm(id: String, target: String, firmware: String, bleFirmware: String,
-                    directory: URL? = nil) throws {
+                    desiredSensorType: UInt8? = nil, directory: URL? = nil) throws {
         do {
             let lease = try lease(id, directory)
             guard !FileManager.default.fileExists(atPath: lease.file.path), !target.isEmpty else {
                 throw Stopped(reason: "activation record already exists or target is empty")
             }
+            guard desiredSensorType == nil || desiredSensorType == 7 else {
+                throw Stopped(reason: "only desired sensor type G7 (7) is supported")
+            }
             try save(Journal(schema: 1, id: id, target: target, firmware: firmware, bleFirmware: bleFirmware,
-                             armed: Date(), revisions: O5RecordLease.revisions, phase: "armed"), lease)
+                             armed: Date(), revisions: O5RecordLease.revisions, phase: "armed",
+                             desiredSensorType: desiredSensorType), lease)
         } catch let error as Stopped { throw error }
         catch { throw Stopped(reason: "activation record unavailable: \(error.localizedDescription)") }
     }
@@ -108,7 +127,19 @@ enum O5EarlyControlEnable {
         guard journal.phase == "armed" || journal.phase == "verified" else {
             throw Stopped(reason: journal.reason ?? "previous attempt was interrupted (\(journal.phase))")
         }
+        guard journal.desiredSensorType == nil || journal.desiredSensorType == 7 else {
+            throw Stopped(reason: "unsupported desired sensor type in the activation record")
+        }
         return journal
+    }
+
+    /// The desired sensor type this record set and verified at activation, or nil if it
+    /// set none or hasn't verified. Reads local evidence only.
+    static func verifiedDesiredSensorType(id: String, target: String, firmware: String, bleFirmware: String,
+                                          directory: URL? = nil) throws -> UInt8? {
+        let journal = try admitted(lease(id, directory), id: id, target: target, firmware: firmware,
+                                   bleFirmware: bleFirmware)
+        return journal.phase == "verified" ? journal.desiredSensorType : nil
     }
 
     /// Runs after insertion is confirmed: status checks, the one enable (unless control is
@@ -132,6 +163,7 @@ enum O5EarlyControlEnable {
         let lease = try lease(id, directory)
         var journal = try admitted(lease, id: id, target: target, firmware: firmware, bleFirmware: bleFirmware)
         let previouslyVerified = journal.phase == "verified"
+        let sensorType = journal.desiredSensorType
         // A crash during any attempt stops later automatic activation work.
         journal.phase = "checking"
         try save(journal, lease)
@@ -149,20 +181,23 @@ enum O5EarlyControlEnable {
             return response
         }
         // With control enabled and no sensor configured, 3.12 reports CGM type 1
-        // (seen on firmware 9.0.4 right after the enable); before that it is 0.
+        // (seen on firmware 9.0.4 right after the enable); before that it is 0. With
+        // desired type G7 it may report 7 instead; that hasn't been observed yet.
+        let allowedCgmTypes: [UInt8] = sensorType == 7 ? [0, 1, 7] : [0, 1]
         @discardableResult
         func status() throws -> O5UnifiedAidStatus {
             let aid = try O5UnifiedAidStatus(exchange(Data("G3.12".utf8), "3.12="))
             let detailed = try O5DetailedStatusPage2(exchange(Data([0x0e, 0x01, 0x02]), "legacy-page-2"))
             guard detailed.fault == 0, detailed.active, detailed.deliveryStatus == 1,
-                  aid.algorithmReady, aid.podActive, aid.isManual, aid.cgmType == 0 || aid.cgmType == 1 else {
+                  aid.algorithmReady, aid.podActive, aid.isManual, allowedCgmTypes.contains(aid.cgmType) else {
                 throw Stopped(reason: "Pod is not ready, active, Manual, sensor-free and fault-free (CGM type \(aid.cgmType))")
             }
             return aid
         }
         func interface() throws -> O5CgmInterfaceStatus {
             let value = try O5CgmInterfaceStatus(exchange(Data("G4.2".utf8), "4.2="))
-            guard value.desiredSensorType == 0, let control = value.control,
+            let allowedDesired: [UInt8] = sensorType == 7 ? [0, 7] : [0]
+            guard let desired = value.desiredSensorType, allowedDesired.contains(desired), let control = value.control,
                   [UInt8(0), 1, 2, 255].contains(control) else {
                 throw Stopped(reason: "unexpected sensor type or interface control")
             }
@@ -171,18 +206,31 @@ enum O5EarlyControlEnable {
         do {
             let first = try status()
             let before = try interface()
-            // Type 1 before the enable is only consistent with control already enabled.
+            // A nonzero CGM type before the write is only consistent with control already enabled.
             guard first.cgmType == 0 || before.control == 0 else {
-                throw Stopped(reason: "CGM type 1 reported while control is not enabled")
+                throw Stopped(reason: "CGM type \(first.cgmType) reported while control is not enabled")
             }
-            if before.control != 0 {
+            let enableControl = before.control != 0
+            let setType = sensorType != nil && before.desiredSensorType != sensorType
+            if enableControl || setType {
                 guard !previouslyVerified else {
-                    throw Stopped(reason: "control changed after verification")
+                    throw Stopped(reason: "control or desired sensor type changed after verification")
                 }
-                let reply = try exchange(enableRequest, enableResponsePrefix, mutation: true)
+                let request = interfaceRequest(enableControl: enableControl, desiredSensorType: setType ? sensorType : nil)
+                let reply = try exchange(request, enableResponsePrefix, mutation: true)
                 try O5AidReplyCheck.extendedSet(reply, responsePrefix: enableResponsePrefix)
             }
-            guard try interface().control == 0 else { throw Stopped(reason: "control enable readback mismatch") }
+            let after = try interface()
+            guard after.control == 0 else { throw Stopped(reason: "control enable readback mismatch") }
+            if let sensorType {
+                guard after.desiredSensorType == sensorType else {
+                    throw Stopped(reason: "desired sensor type readback mismatch (\(after))")
+                }
+                // The identity is a separate step; none may be stored yet.
+                guard try O5G7SensorInfo(exchange(Data("G4.1".utf8), "4.1=")).isEmpty else {
+                    throw Stopped(reason: "the Pod already has sensor info")
+                }
+            }
             try status()
             journal.phase = "verified"
             try save(journal, lease)

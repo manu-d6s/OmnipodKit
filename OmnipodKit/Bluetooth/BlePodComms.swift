@@ -184,7 +184,7 @@ class BlePodComms: PodComms {
 
     // Handles negotiating the LTK (if needed), establishing the session and transport,
     // running the AssignVesion command, and then creating the PodState for the pod.
-    private func pairPod(insulinType: InsulinType, earlyControlEnable: Bool) throws {
+    private func pairPod(insulinType: InsulinType, earlyControlEnable: Bool, earlyControlG7Type: Bool) throws {
         // We should already be holding podStateLock during calls to this function, so try() should fail
         assert(!podStateLock.try(), "\(#function) should be invoked while holding podStateLock")
 
@@ -245,6 +245,7 @@ class BlePodComms: PodComms {
         log.bleDebug("@@@ pairPod: creating PodState for versionResponse %{public}@ and transport state %{public}@", String(describing: versionResponse), transport.state.inlineDescription)
 
         let earlyControlEnableID = podType.isO5 && earlyControlEnable ? UUID().uuidString : nil
+        let earlyControlDesiredSensorType: UInt8? = earlyControlEnableID != nil && earlyControlG7Type ? 7 : nil
         self.podState = PodState(
             address: podId,
             firmwareVersion: String(describing: versionResponse.firmwareVersion),
@@ -254,6 +255,7 @@ class BlePodComms: PodComms {
             insulinType: insulinType,
             podType: versionResponse.podType,
             earlyControlEnableID: earlyControlEnableID,
+            earlyControlDesiredSensorType: earlyControlDesiredSensorType,
             bleMessageTransportState: transport.state,
             ltk: ltk,
             bleIdentifier: manager.peripheral.identifier.uuidString,
@@ -265,7 +267,8 @@ class BlePodComms: PodComms {
             // creation must stop rather than silently skip the opt-in.
             let state = self.podState!
             try O5EarlyControlEnable.arm(id: id, target: state.earlyControlTarget,
-                firmware: state.firmwareVersion, bleFirmware: state.iFirmwareVersion)
+                firmware: state.firmwareVersion, bleFirmware: state.iFirmwareVersion,
+                desiredSensorType: earlyControlDesiredSensorType)
         }
 
         // podState setupProgress state should be addressAssigned
@@ -595,6 +598,7 @@ class BlePodComms: PodComms {
         insulinType: InsulinType,
         messageLogger: MessageLogger?,
         earlyControlEnable: Bool = false,
+        earlyControlG7Type: Bool = false,
         _ block: @escaping (_ result: SessionRunResult) -> Void
     ) {
         guard let manager = manager else {
@@ -619,7 +623,8 @@ class BlePodComms: PodComms {
                     // Fresh pod: full pairing sequence (HELLO + LTK + EAP-AKA)
                     try manager.sendHello(myId: myId)
                     try manager.enableNotifications() // Seemingly this cannot be done before the hello command, or the pod disconnects
-                    try pairPod(insulinType: insulinType, earlyControlEnable: earlyControlEnable)
+                    try pairPod(insulinType: insulinType, earlyControlEnable: earlyControlEnable,
+                                earlyControlG7Type: earlyControlG7Type)
                 } else if !needsSessionEstablishment,
                           let ck = podState?.bleMessageTransportState.ck,
                           !ck.isEmpty {

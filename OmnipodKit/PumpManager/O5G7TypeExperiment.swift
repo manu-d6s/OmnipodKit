@@ -15,6 +15,10 @@ import Foundation
 ///    `SE4.2=00 02 04 00,SE4.1=<identity>`, once, then read back control, desired type,
 ///    sensor info and status.
 ///
+/// On a Pod whose activation already set and verified desired type 7 (the early enable
+/// with G7), step 2 runs without step 1. That is the official add-G7 batch on a Pod
+/// activated with G7 selected but no identity.
+///
 /// Each step has its own per-Pod record. Every exchange is saved before it is sent. A
 /// step that reached its write is never sent again for that Pod, whatever the outcome; a
 /// step that stopped before its write is kept as an earlier attempt and may be run again.
@@ -225,7 +229,8 @@ enum O5G7TypeExperiment {
 
     /// Runs on the caller's Pod session queue, only after step 1 verified. Returns a summary.
     static func sendIdentityBatch(target: String, firmware: String, bleFirmware: String,
-                                  pairingCode: String, serialNumber: String, directory: URL? = nil,
+                                  pairingCode: String, serialNumber: String,
+                                  typeSetAtActivation: Bool = false, directory: URL? = nil,
                                   send: (Data, String) throws -> Data,
                                   detailedStatus: () throws -> Data) throws -> String {
         let step = batchStep
@@ -241,8 +246,8 @@ enum O5G7TypeExperiment {
         } catch {
             throw Stopped(step: step, reason: "record unavailable: \(error.localizedDescription)")
         }
-        guard typePhase == "verified" else {
-            throw Stopped(step: step, reason: "step 1 (desired type) has not been verified for this Pod")
+        guard typePhase == "verified" || typeSetAtActivation else {
+            throw Stopped(step: step, reason: "desired type G7 has not been verified for this Pod (step 1 or at activation)")
         }
         let (lease, record) = try begin(step: step, file: "batch.json", target: target, firmware: firmware,
                                         bleFirmware: bleFirmware, pairingCode: pairingCode, serialNumber: serialNumber,

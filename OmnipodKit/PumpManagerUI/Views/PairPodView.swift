@@ -54,6 +54,13 @@ struct PairPodView: View {
                     Text("Enables control once after insertion while staying in Manual mode. Sensor pairing happens separately. This experiment may fault the Pod.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
+                    if viewModel.earlyControlEnable {
+                        Toggle("Also set desired sensor type G7", isOn: $viewModel.earlyControlG7Type)
+                            .disabled(viewModel.podIsActivated || viewModel.state.isProcessing)
+                        Text("Writes desired type G7 together with the control enable, as for a Pod activated with G7 selected. The sensor identity is still sent separately, with step 2 of the type experiment.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .accessibility(sortPriority: 1)
