@@ -370,6 +370,41 @@ final class O5EarlyControlEnableTests: XCTestCase {
         XCTAssertThrowsError(try finish())
         XCTAssertEqual(try snapshot()["phase"] as? String, "stopped")
     }
+    func testG7SensorInfoWithoutIdentityOrUnknownLayoutIsRecorded() throws {
+        let typeOnly = Data([0, 7, 0, 0, 0, 0, 3, 1, 7])
+        for info in [typeOnly, Data([0, 2, 9, 9])] {
+            try armG7()
+            control = 255; desired = 0; requests.removeAll()
+            expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+            sensorInfo = info
+            try finish()
+            XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+            let exchanges = try XCTUnwrap(snapshot()["exchanges"] as? [[String: Any]])
+            XCTAssertEqual(exchanges.count, g7Requests.count + writes.count + 2) // plus two detailed reads
+        }
+    }
+    func testG7AcceptsAnyCgmTypeAndUnreadyAlgorithmAfterTheWrite() throws {
+        try armG7()
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+        afterWrite = { self.cgm = 2; self.ready = false }
+        try finish()
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+    }
+    func testG7StillStopsOnFaultModeOrDeliveryAfterTheWrite() throws {
+        for change in 0..<3 {
+            try armG7()
+            control = 255; desired = 0; fault = 0; mode = 1; delivery = 1; requests.removeAll()
+            expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+            afterWrite = {
+                if change == 0 { self.fault = 226 }
+                if change == 1 { self.mode = 2 }
+                if change == 2 { self.delivery = 0 }
+            }
+            XCTAssertThrowsError(try finish())
+            XCTAssertEqual(writes.count, 1)
+            XCTAssertEqual(try snapshot()["phase"] as? String, "stopped")
+        }
+    }
     func testOnlyG7CanBeArmed() {
         XCTAssertThrowsError(try O5EarlyControlEnable.arm(id: UUID().uuidString, target: "pod-A", firmware: "9.0.4",
             bleFirmware: "5.0.2", desiredSensorType: 4, directory: root))

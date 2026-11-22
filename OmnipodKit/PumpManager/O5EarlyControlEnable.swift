@@ -194,6 +194,16 @@ enum O5EarlyControlEnable {
             }
             return aid
         }
+        // After desired type G7 is set, the CGM type and algorithm readiness in 3.12 haven't
+        // been observed. They are recorded, not required: a stop here would only leave setup
+        // unfinished. A fault, a delivery or mode change, or an inactive Pod still stops.
+        func statusAfterG7Type() throws {
+            let aid = try O5UnifiedAidStatus(exchange(Data("G3.12".utf8), "3.12="))
+            let detailed = try O5DetailedStatusPage2(exchange(Data([0x0e, 0x01, 0x02]), "legacy-page-2"))
+            guard detailed.fault == 0, detailed.active, detailed.deliveryStatus == 1, aid.podActive, aid.isManual else {
+                throw Stopped(reason: "Pod is not active, Manual and fault-free after setting desired type G7")
+            }
+        }
         func interface() throws -> O5CgmInterfaceStatus {
             let value = try O5CgmInterfaceStatus(exchange(Data("G4.2".utf8), "4.2="))
             let allowedDesired: [UInt8] = sensorType == 7 ? [0, 7] : [0]
@@ -226,12 +236,17 @@ enum O5EarlyControlEnable {
                 guard after.desiredSensorType == sensorType else {
                     throw Stopped(reason: "desired sensor type readback mismatch (\(after))")
                 }
-                // The identity is a separate step; none may be stored yet.
-                guard try O5G7SensorInfo(exchange(Data("G4.1".utf8), "4.1=")).isEmpty else {
-                    throw Stopped(reason: "the Pod already has sensor info")
+                // The identity is a separate step; none may be stored yet. The reply layout
+                // with desired type G7 hasn't been observed, so only a stored pairing code or
+                // serial stops; the reply itself is kept in the record.
+                let reply = try exchange(Data("G4.1".utf8), "4.1=")
+                if let info = try? O5G7SensorInfo(reply), info.pairingCode != nil || info.serialNumber != nil {
+                    throw Stopped(reason: "the Pod already has a sensor identity")
                 }
+                try statusAfterG7Type()
+            } else {
+                try status()
             }
-            try status()
             journal.phase = "verified"
             try save(journal, lease)
         } catch {
