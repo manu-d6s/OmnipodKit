@@ -84,4 +84,12 @@ final class O5PodDataLogTests: XCTestCase {
         XCTAssertEqual(fields["raw"] as? String, "010203")
         XCTAssertNil(fields["podTime"])
     }
+
+    func testInvalidNumbersAreSkippedInsteadOfCrashing() throws {
+        XCTAssertThrowsError(try O5PodDataLog.line(["value": Double.nan]))
+        XCTAssertThrowsError(try O5PodDataLog.line(["value": Double.infinity]))
+        O5PodDataLog.append(target: "pod-A", header: [:], entry: ["kind": "command", "units": Double.nan], directory: root)
+        O5PodDataLog.append(target: "pod-A", header: [:], entry: ["kind": "status"], directory: root)
+        XCTAssertEqual(try lines("pod-A").map { $0["kind"] as? String }, ["header", "status"])
+    }
 }

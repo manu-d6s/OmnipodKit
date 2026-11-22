@@ -53,8 +53,13 @@ enum O5PodDataLog {
         }
     }
 
-    private static func line(_ object: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) + Data("\n".utf8)
+    struct InvalidEntry: Error {}
+
+    /// JSONSerialization raises an uncatchable exception for invalid input, such as NaN or
+    /// infinite numbers, so every entry is validated first and skipped if invalid.
+    static func line(_ object: [String: Any]) throws -> Data {
+        guard JSONSerialization.isValidJSONObject(object) else { throw InvalidEntry() }
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) + Data("\n".utf8)
     }
 
     static func timestamp(_ date: Date) -> String {
