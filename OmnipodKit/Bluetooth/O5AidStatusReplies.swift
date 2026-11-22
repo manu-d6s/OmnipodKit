@@ -152,10 +152,12 @@ struct O5UnifiedAidStatus {
         cgmData = try r.take(length)
         let knownLengths: [UInt8: Int] = [0: 0, 4: 9, 7: 16, 2: 7, 3: 7, 5: 7,
                                           8: 31, 9: 31, 10: 31, 11: 31, 12: 31]
-        if let expected = knownLengths[cgmType], expected != length {
+        // A type with no data yet (length 0) is accepted, for example desired type G7
+        // set before any identity; a non-zero size must match the type.
+        if length != 0, let expected = knownLengths[cgmType], expected != length {
             throw O5AidStatusReplyError.malformed("CGM data size disagrees with sensor type")
         }
-        if cgmType == 7 {
+        if cgmType == 7, length == 16 {
             var c = O5AidReplyReader(cgmData)
             g7 = try G7(sessionActivationTime: c.number(4), sessionDuration: Int32(bitPattern: c.number(4)),
                 sensorTimestamp: Int32(bitPattern: c.number(4)), algorithmState: UInt8(c.number(1)),

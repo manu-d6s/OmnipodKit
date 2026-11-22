@@ -59,4 +59,30 @@ final class O5CgmStatusReportTests: XCTestCase {
         let text = O5CgmStatusReport.text(status: Data([0, 1, 0]), interface: Data([0]), sensor: Data([0, 3, 9]))
         XCTAssertEqual(text.components(separatedBy: "Invalid O5 reply").count - 1, 3)
     }
+
+    private func aidStatus(cgmType: UInt8, cgmData: Data = Data()) -> Data {
+        var bytes = Data(repeating: 0, count: 24)
+        bytes[1] = UInt8(22 + cgmData.count); bytes[10] = 1; bytes[20] = 3; bytes[21] = cgmType
+        bytes[23] = UInt8(cgmData.count)
+        return bytes + cgmData
+    }
+
+    func testTypeWithoutDataIsAccepted() throws {
+        let status = try O5UnifiedAidStatus(aidStatus(cgmType: 7))
+        XCTAssertEqual(status.cgmType, 7)
+        XCTAssertNil(status.g7)
+        XCTAssertTrue(status.cgmData.isEmpty)
+    }
+
+    func testWrongNonZeroDataSizeIsStillRejected() {
+        XCTAssertThrowsError(try O5UnifiedAidStatus(aidStatus(cgmType: 7, cgmData: Data(repeating: 0, count: 4))))
+        XCTAssertThrowsError(try O5UnifiedAidStatus(aidStatus(cgmType: 4, cgmData: Data(repeating: 0, count: 16))))
+    }
+
+    func testG7DataIsStillParsed() throws {
+        let block = Data([0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 2, 0, 0xfe, 1])
+        let status = try O5UnifiedAidStatus(aidStatus(cgmType: 7, cgmData: block))
+        XCTAssertEqual(status.g7?.algorithmState, 2)
+        XCTAssertEqual(status.g7?.trendRate, -2)
+    }
 }

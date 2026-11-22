@@ -66,7 +66,8 @@ final class O5PodDataLogTests: XCTestCase {
     func testStatusFieldsKeepTheRawResponse() throws {
         let status = try StatusResponse(encodedData: Data(hexadecimalString: "1d19050ec82c08376f9801dc")!)
         let fields = O5PodDataLog.statusFields(status)
-        XCTAssertEqual(fields["raw"] as? String, "1d19050ec82c08376f9801dc")
+        // StatusResponse.data excludes the 2-byte CRC.
+        XCTAssertEqual(fields["raw"] as? String, "1d19050ec82c08376f98")
         XCTAssertEqual(fields["insulinDelivered"] as? Double, status.insulinDelivered)
         XCTAssertNotNil(try? JSONSerialization.data(withJSONObject: fields))
     }
