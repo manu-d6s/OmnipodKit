@@ -54,6 +54,9 @@ enum O5CgmStatusReport {
             let info = try O5G7SensorInfo(sensor)
             if info.isEmpty {
                 lines.append("No sensor configured")
+            } else if info.isPlaceholder {
+                lines.append("Sensor type: \(info.sensorType.map(cgmTypeName) ?? "absent")")
+                lines.append("No identity yet (placeholder pairing code and serial)")
             } else {
                 lines.append("Sensor type: \(info.sensorType.map(cgmTypeName) ?? "absent")")
                 lines.append("Pairing code: \(info.pairingCode == nil ? "absent" : "set")")

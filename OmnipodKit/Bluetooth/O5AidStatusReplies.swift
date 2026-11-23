@@ -189,6 +189,17 @@ struct O5G7SensorInfo {
         serialNumber = fields[3]
     }
 
+    /// Once desired type G7 is set, the Pod creates a G7 record with placeholders: pairing
+    /// code "0000" and serial "000000000000" (seen on firmware 9.0.4). Only a code or serial
+    /// other than all zeros is an identity.
+    var hasIdentity: Bool {
+        func isPlaceholder(_ value: Data?) -> Bool { value.map { $0.allSatisfy { $0 == 0x30 } } ?? true }
+        return !(isPlaceholder(pairingCode) && isPlaceholder(serialNumber))
+    }
+
+    /// A record without an identity: the placeholder the Pod creates for desired type G7.
+    var isPlaceholder: Bool { !isEmpty && !hasIdentity }
+
     /// Whether the stored identity is exactly this pairing code and serial.
     func matches(pairingCode code: String, serialNumber serial: String) -> Bool {
         pairingCode == Data(code.utf8) && serialNumber == Data(serial.utf8)

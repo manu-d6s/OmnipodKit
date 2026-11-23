@@ -105,6 +105,15 @@ enum O5G7TypeExperiment {
         try load(lease(target, file, directory))?.phase
     }
 
+    /// The step 1 stop reason of builds before the placeholder fix. It was only reached after
+    /// the type write's reply passed and G4.2 read back desired type 7 with control enabled.
+    static let placeholderStopReason = "sensor info appeared after the type write"
+
+    private static func stoppedOnPlaceholder(target: String, directory: URL?) throws -> Bool {
+        guard let record = try load(lease(target, "type.json", directory)) else { return false }
+        return record.phase == "stopped" && record.reason == placeholderStopReason
+    }
+
     // MARK: - Running one step
 
     /// Opens the step's record: refuses if an earlier attempt reached its write, sets
@@ -217,7 +226,10 @@ enum O5G7TypeExperiment {
             guard after.desiredSensorType == 7, after.control == 0 else {
                 throw Stopped(step: step, reason: "readback is not desired type 7 with control enabled (\(after))")
             }
-            guard try s.sensorInfo().isEmpty else { throw Stopped(step: step, reason: "sensor info appeared after the type write") }
+            // The Pod creates a placeholder G7 record once the type is set; only an identity stops.
+            let info = try s.sensorInfo()
+            guard !info.hasIdentity else { throw Stopped(step: step, reason: "a sensor identity appeared after the type write") }
+            try s.observe("G4.1 after the type write: \(info.isPlaceholder ? "placeholder G7 record" : "empty")")
             let status = try s.status(step)
             try s.observe("CGM type after the type write: \(status.cgmType)")
             try s.setPhase("verified")
@@ -246,7 +258,15 @@ enum O5G7TypeExperiment {
         } catch {
             throw Stopped(step: step, reason: "record unavailable: \(error.localizedDescription)")
         }
-        guard typePhase == "verified" || typeSetAtActivation else {
+        // Builds before the placeholder fix stopped step 1 on the placeholder record, after the
+        // type write was accepted and read back as 7. That record counts as verified.
+        let typeStoppedOnPlaceholder: Bool
+        do {
+            typeStoppedOnPlaceholder = try stoppedOnPlaceholder(target: target, directory: directory)
+        } catch {
+            throw Stopped(step: step, reason: "record unavailable: \(error.localizedDescription)")
+        }
+        guard typePhase == "verified" || typeStoppedOnPlaceholder || typeSetAtActivation else {
             throw Stopped(step: step, reason: "desired type G7 has not been verified for this Pod (step 1 or at activation)")
         }
         let (lease, record) = try begin(step: step, file: "batch.json", target: target, firmware: firmware,
@@ -258,7 +278,7 @@ enum O5G7TypeExperiment {
             guard interface.control == 0, interface.desiredSensorType == 7 else {
                 throw Stopped(step: step, reason: "expected control enabled and desired type 7 (\(interface))")
             }
-            guard try s.sensorInfo().isEmpty else { throw Stopped(step: step, reason: "the Pod already has sensor info") }
+            guard try !s.sensorInfo().hasIdentity else { throw Stopped(step: step, reason: "the Pod already has a sensor identity") }
 
             let reply = try s.exchange(batch, O5G7Identity.batchResponsePrefix, true)
             let results: (enable: Data, identity: Data)

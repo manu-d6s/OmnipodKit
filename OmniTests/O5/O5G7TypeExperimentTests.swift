@@ -18,6 +18,9 @@ final class O5G7TypeExperimentTests: XCTestCase {
     private var fault: UInt8 = 0
     private var delivery: UInt8 = 2
     private var stored: (code: String, serial: String)?
+    // The Pod creates a placeholder G7 record once desired type 7 is set.
+    private var typeCreatesPlaceholder = true
+    private var afterType: (() -> Void)?
     private var typeReply = "0"
     private var typeApplies = true
     private var batchReply = "0,ES4.1=0"
@@ -60,7 +63,8 @@ final class O5G7TypeExperimentTests: XCTestCase {
         default:
             XCTAssertEqual(prefix, "ES4.2=")
             if request == typeWrite {
-                if typeApplies { desired = 7 }
+                if typeApplies { desired = 7; if typeCreatesPlaceholder { stored = ("0000", "000000000000") } }
+                afterType?()
                 return Data(typeReply.utf8)
             }
             XCTAssertEqual(request, batch)
@@ -251,5 +255,63 @@ final class O5G7TypeExperimentTests: XCTestCase {
         desired = 0
         XCTAssertThrowsError(try sendBatch(typeSetAtActivation: true))
         XCTAssertTrue(writes.isEmpty)
+    }
+
+    // MARK: - Placeholder record
+
+    private func recordText() throws -> String {
+        try XCTUnwrap(try O5G7TypeExperiment.record(target: target, directory: root))
+    }
+
+    func testTypeStepAcceptsThePlaceholderRecord() throws {
+        try setType()
+        XCTAssertEqual(try phase("type.json"), "verified")
+        XCTAssertTrue(try recordText().contains("placeholder G7 record"))
+    }
+
+    func testIdentityAppearingAfterTheTypeWriteStops() throws {
+        afterType = { self.stored = ("1111", "111111111111") }
+        XCTAssertThrowsError(try setType()) { XCTAssertTrue($0.localizedDescription.contains("sensor identity appeared")) }
+        XCTAssertEqual(try phase("type.json"), "stopped")
+    }
+
+    func testBatchRunsOverThePlaceholderRecord() throws {
+        try setType()
+        requests.removeAll()
+        try sendBatch()
+        XCTAssertEqual(writes, [batch])
+        XCTAssertEqual(try phase("batch.json"), "stored")
+    }
+
+    /// A type.json as written by a build before the placeholder fix.
+    private func writeOldTypeRecord(reason: String) throws {
+        let dir = root.appendingPathComponent("pod-A-1-2-ble")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let json: [String: Any] = ["schema": 1, "step": O5G7TypeExperiment.typeStep, "target": target,
+            "firmware": "9.0.4", "bleFirmware": "5.0.2", "created": 0, "revisions": [String: String](),
+            "phase": "stopped", "exchanges": [Any](), "observations": [Any](), "reason": reason]
+        try JSONSerialization.data(withJSONObject: json).write(to: dir.appendingPathComponent("type.json"))
+    }
+
+    func testBatchRunsAfterStep1StoppedOnThePlaceholder() throws {
+        try writeOldTypeRecord(reason: O5G7TypeExperiment.placeholderStopReason)
+        desired = 7; stored = ("0000", "000000000000")
+        try sendBatch()
+        XCTAssertEqual(writes, [batch])
+        XCTAssertEqual(try phase("batch.json"), "stored")
+    }
+
+    func testBatchRefusesAStep1StoppedForAnotherReason() throws {
+        try writeOldTypeRecord(reason: "readback is not desired type 7 with control enabled")
+        desired = 7; stored = ("0000", "000000000000")
+        XCTAssertThrowsError(try sendBatch())
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testBatchStopsOnAStoredIdentity() throws {
+        try setType()
+        stored = ("1111", "111111111111")
+        XCTAssertThrowsError(try sendBatch())
+        XCTAssertEqual(writes, [typeWrite])
     }
 }

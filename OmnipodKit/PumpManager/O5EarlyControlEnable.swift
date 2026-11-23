@@ -240,7 +240,7 @@ enum O5EarlyControlEnable {
                 // with desired type G7 hasn't been observed, so only a stored pairing code or
                 // serial stops; the reply itself is kept in the record.
                 let reply = try exchange(Data("G4.1".utf8), "4.1=")
-                if let info = try? O5G7SensorInfo(reply), info.pairingCode != nil || info.serialNumber != nil {
+                if let info = try? O5G7SensorInfo(reply), info.hasIdentity {
                     throw Stopped(reason: "the Pod already has a sensor identity")
                 }
                 try statusAfterG7Type()
