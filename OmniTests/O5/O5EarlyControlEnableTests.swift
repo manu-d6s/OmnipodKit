@@ -383,6 +383,14 @@ final class O5EarlyControlEnableTests: XCTestCase {
             XCTAssertEqual(exchanges.count, g7Requests.count + writes.count + 2) // plus two detailed reads
         }
     }
+    func testG7AcceptsThePlaceholderRecordAfterTheWrite() throws {
+        try armG7()
+        control = 255; desired = 0; requests.removeAll()
+        expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])
+        sensorInfo = Data(hexadecimalString: "002f010700000001ff02303030300330303030303030303030303004012c05ffffffffffff06ffffffff07ffffffff0802")!
+        try finish()
+        XCTAssertEqual(try snapshot()["phase"] as? String, "verified")
+    }
     func testG7AcceptsAnyCgmTypeAndUnreadyAlgorithmAfterTheWrite() throws {
         try armG7()
         expectedWrite = Data("SE4.2=".utf8) + Data([0, 4, 4, 0, 1, 7])

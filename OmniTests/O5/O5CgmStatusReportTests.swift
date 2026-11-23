@@ -85,4 +85,27 @@ final class O5CgmStatusReportTests: XCTestCase {
         XCTAssertEqual(status.g7?.algorithmState, 2)
         XCTAssertEqual(status.g7?.trendRate, -2)
     }
+
+    // G4.1 right after desired type 7 was written, before any identity (2026-11-23, 9.0.4).
+    private let placeholderSensorInfo = Data(hexadecimalString: "002f010700000001ff02303030300330303030303030303030303004012c05ffffffffffff06ffffffff07ffffffff0802")!
+
+    func testPlaceholderRecordHasNoIdentity() throws {
+        let info = try O5G7SensorInfo(placeholderSensorInfo)
+        XCTAssertFalse(info.isEmpty)
+        XCTAssertEqual(info.sensorType, 7)
+        XCTAssertEqual(info.pairingCode, Data("0000".utf8))
+        XCTAssertFalse(info.hasIdentity)
+        XCTAssertTrue(info.isPlaceholder)
+
+        XCTAssertFalse(try O5G7SensorInfo(emptySensorInfo).hasIdentity)
+        XCTAssertFalse(try O5G7SensorInfo(emptySensorInfo).isPlaceholder)
+        XCTAssertTrue(try O5G7SensorInfo(g7SensorInfo(code: "1234", serial: "123456789012")).hasIdentity)
+        XCTAssertTrue(try O5G7SensorInfo(g7SensorInfo(code: "0000", serial: "123456789012")).hasIdentity)
+    }
+
+    func testReportNamesThePlaceholderRecord() {
+        let text = O5CgmStatusReport.text(status: statusAfterEnable, interface: interfaceAfterEnable, sensor: placeholderSensorInfo)
+        XCTAssertTrue(text.contains("No identity yet"))
+        XCTAssertFalse(text.contains("Pairing code: set"))
+    }
 }
