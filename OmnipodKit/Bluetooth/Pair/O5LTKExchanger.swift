@@ -554,13 +554,17 @@ class O5LTKExchanger {
             // Enough to tell a new Insulet intermediate from anything else: if the
             // pod's certificate chains to the intermediate it showed, that key is
             // the one to add to O5PodIdentity.insuletPodAnchorKeys once confirmed.
+            let podCertificate = SignedCertificate(der: podCertDER)
             let chainsToShownIntermediate = podIntermediateKey.map {
-                SignedCertificate(der: podCertDER)?.isSigned(byPublicKey: $0) ?? false
+                podCertificate?.isSigned(byPublicKey: $0) ?? false
             } ?? false
-            log.default("Pod certificate not Insulet's: signature %{public}@, SPS2.1 intermediate key %{public}@, pod certificate signed by it: %{public}@",
+            log.default("Pod certificate not Insulet's: signature %{public}@, SPS2.1 intermediate key %{public}@, pod certificate signed by it: %{public}@, its roles: %{public}@",
                         signatureValid ? "valid" : "invalid",
                         podIntermediateKey?.hexadecimalString ?? "none",
-                        String(describing: chainsToShownIntermediate))
+                        String(describing: chainsToShownIntermediate),
+                        podCertificate?.subjectAlternativeNameURIs?
+                            .filter { $0.hasPrefix("devicetype:") }
+                            .joined(separator: ",") ?? "unreadable")
         }
 
         // Stop before the LTK is agreed so the user can decide, and so that

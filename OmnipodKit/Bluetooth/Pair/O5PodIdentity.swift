@@ -13,8 +13,8 @@ import Foundation
 ///
 /// A real Omnipod 5 proves itself during pairing: it shows Insulet's pod
 /// intermediate (CN=INS01PG1) in SPS2.1, its own certificate issued by that
-/// intermediate in SPS2, and signs the channel-binding transcript with the key
-/// in it. The simulator mirrors this with its own published CA, so the two are
+/// intermediate in SPS2, naming its role as a pod, and signs the
+/// channel-binding transcript with the key in it. The simulator mirrors this with its own published CA, so the two are
 /// distinguishable. Pairing with anything but a genuine pod asks the user
 /// first, since it may mean the pairing is being intercepted; after that it
 /// is treated like a real pod. The simulator's key is public, so "simulated"
@@ -42,6 +42,10 @@ enum O5PodIdentity {
         ].joined())!
     ]
 
+    /// The role a pod's certificate names in its subject alternative names.
+    /// An intermediate can also issue certificates for other uses.
+    static let podRole = "devicetype:pod"
+
     /// The LoopKit/pod simulator's CA. Its signing key is published in that
     /// repository as a development marker, so this proves "simulated", not
     /// authenticity.
@@ -67,13 +71,18 @@ enum O5PodIdentity {
     ///
     /// Validity dates are deliberately ignored. A real pod was found pairing
     /// with a certificate nineteen months past its notAfter, so honouring
-    /// expiry here would flag pods in the field as suspect. This asks one
-    /// question only: who signed this certificate.
+    /// expiry here would flag pods in the field as suspect. This asks two
+    /// questions only: who signed this certificate, and is it a pod's.
     static func authenticity(leafCertificate: Data) -> O5PodAuthenticity {
+        authenticity(leafCertificate: leafCertificate, anchorKeys: insuletPodAnchorKeys)
+    }
+
+    /// As above, with the anchor keys given, so tests can use their own chain.
+    static func authenticity(leafCertificate: Data, anchorKeys: [Data]) -> O5PodAuthenticity {
         guard let signed = SignedCertificate(der: leafCertificate) else {
             return .unverified
         }
-        if insuletPodAnchorKeys.contains(where: signed.isSigned(byPublicKey:)) {
+        if anchorKeys.contains(where: signed.isSigned(byPublicKey:)), hasPodRole(signed) {
             return .genuine
         }
         if let simulatorKey = O5CertificateStore.extractP256PublicKey(fromDERCert: simulatorAnchorCertificate),
@@ -81,6 +90,12 @@ enum O5PodIdentity {
             return .simulated
         }
         return .unverified
+    }
+
+    /// Whether the certificate's only device role is the pod role.
+    static func hasPodRole(_ certificate: SignedCertificate) -> Bool {
+        guard let uris = certificate.subjectAlternativeNameURIs else { return false }
+        return uris.filter { $0.hasPrefix("devicetype:") } == [podRole]
     }
 }
 
@@ -118,7 +133,75 @@ struct SignedCertificate {
         return key.isValidSignature(sig, for: tbs)
     }
 
+
+    /// The URIs among the subject alternative names, read from the signed body
+    /// only. Empty when there are none; nil when the extensions cannot be parsed.
+    var subjectAlternativeNameURIs: [String]? {
+        // TBSCertificate ::= SEQUENCE { ..., extensions [3] EXPLICIT SEQUENCE OF Extension OPTIONAL }
+        guard let body = SignedCertificate.contents(of: tbs, at: tbs.startIndex, expecting: 0x30),
+              let fields = SignedCertificate.children(of: tbs, in: body)
+        else {
+            return nil
+        }
+        guard let extensionsField = fields.first(where: { $0.tag == 0xa3 }) else { return [] }
+        guard let wrapper = SignedCertificate.children(of: tbs, in: extensionsField.contents),
+              wrapper.count == 1, wrapper[0].tag == 0x30,
+              let extensions = SignedCertificate.children(of: tbs, in: wrapper[0].contents)
+        else {
+            return nil
+        }
+        var uris: [String]?
+        for ext in extensions {
+            // Extension ::= SEQUENCE { extnID OID, critical BOOLEAN DEFAULT FALSE, extnValue OCTET STRING }
+            guard ext.tag == 0x30,
+                  let parts = SignedCertificate.children(of: tbs, in: ext.contents),
+                  parts.count == 2 || (parts.count == 3 && parts[1].tag == 0x01),
+                  parts[0].tag == 0x06, parts[parts.count - 1].tag == 0x04
+            else {
+                return nil
+            }
+            guard tbs[parts[0].contents] == SignedCertificate.subjectAltNameOID else { continue }
+            // GeneralNames ::= SEQUENCE OF GeneralName; uniformResourceIdentifier is [6] IMPLICIT IA5String.
+            guard uris == nil,
+                  let value = SignedCertificate.children(of: tbs, in: parts[parts.count - 1].contents),
+                  value.count == 1, value[0].tag == 0x30,
+                  let names = SignedCertificate.children(of: tbs, in: value[0].contents)
+            else {
+                return nil
+            }
+            var found: [String] = []
+            for name in names where name.tag == 0x86 {
+                guard let uri = String(data: tbs[name.contents], encoding: .ascii) else { return nil }
+                found.append(uri)
+            }
+            uris = found
+        }
+        return uris ?? []
+    }
+
+    /// id-ce-subjectAltName, 2.5.29.17.
+    private static let subjectAltNameOID = Data([0x55, 0x1d, 0x11])
+
     // MARK: - Minimal DER
+
+    /// The elements directly inside a range, each as its tag and contents.
+    /// Nil unless they fill the range exactly.
+    private static func children(of data: Data, in range: Range<Data.Index>) -> [(tag: UInt8, contents: Range<Data.Index>)]? {
+        var result: [(tag: UInt8, contents: Range<Data.Index>)] = []
+        var index = range.lowerBound
+        while index < range.upperBound {
+            let tag = data[index]
+            guard tag & 0x1f != 0x1f, // no multi-byte tags in a certificate
+                  let contents = contents(of: data, at: index, expecting: tag),
+                  contents.upperBound <= range.upperBound
+            else {
+                return nil
+            }
+            result.append((tag: tag, contents: contents))
+            index = contents.upperBound
+        }
+        return result
+    }
 
     /// The range of one complete element, tag and length included.
     private static func element(in data: Data, at index: Data.Index, expecting tag: UInt8) -> Range<Data.Index>? {
