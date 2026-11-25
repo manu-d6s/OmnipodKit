@@ -24,6 +24,8 @@ final class O5G7TypeExperimentTests: XCTestCase {
     private var typeReply = "0"
     private var typeApplies = true
     private var batchReply = "0,ES4.1=0"
+    // The identity the batch under test carries.
+    private var sent: (code: String, serial: String) = ("1234", "123456789012")
     private var batchStores = true
     private var batchClearsDesiredType = false
     private var failNext: String?
@@ -37,7 +39,7 @@ final class O5G7TypeExperimentTests: XCTestCase {
     private let typeWrite = Data("SE4.2=".utf8) + Data([0, 2, 1, 7])
     private var batch: Data {
         Data("SE4.2=".utf8) + Data([0, 2, 4, 0]) + Data(",SE4.1=".utf8) + Data([0, 18, 2])
-            + Data("1234".utf8) + Data([3]) + Data("123456789012".utf8)
+            + Data(sent.code.utf8) + Data([3]) + Data(sent.serial.utf8)
     }
 
     private func aidStatus() -> Data {
@@ -68,7 +70,7 @@ final class O5G7TypeExperimentTests: XCTestCase {
                 return Data(typeReply.utf8)
             }
             XCTAssertEqual(request, batch)
-            if batchStores { stored = ("1234", "123456789012") }
+            if batchStores { stored = sent }
             if batchClearsDesiredType { desired = 0 }
             return Data(batchReply.utf8)
         }
@@ -313,5 +315,116 @@ final class O5G7TypeExperimentTests: XCTestCase {
         stored = ("1111", "111111111111")
         XCTAssertThrowsError(try sendBatch())
         XCTAssertEqual(writes, [typeWrite])
+    }
+
+    // MARK: - Step 3: replace the identity
+
+    /// A Pod receiving one G7, and a second sensor's identity to replace it with.
+    private func podWithSensor() {
+        control = 0; desired = 7; cgm = 7; mode = 1; delivery = 2; fault = 0
+        stored = ("1234", "123456789012")
+        sent = ("5678", "567856785678")
+    }
+    @discardableResult
+    private func replace(target: String? = nil) throws -> String {
+        try O5G7TypeExperiment.replaceIdentity(target: target ?? self.target, firmware: "9.0.4", bleFirmware: "5.0.2",
+            pairingCode: sent.code, serialNumber: sent.serial, directory: root, send: send, detailedStatus: detailed)
+    }
+
+    func testReplaceStoresTheNewIdentity() throws {
+        podWithSensor()
+        let summary = try replace()
+        XCTAssertEqual(writes, [batch])
+        XCTAssertEqual(names(requests), ["G3.12", "G4.2", "G4.1", "batch", "G4.2", "G4.1", "G3.12"])
+        XCTAssertEqual(try phase("replace.json"), "replaced")
+        XCTAssertEqual(stored?.code, "5678")
+        XCTAssertTrue(summary.hasPrefix("New identity accepted"))
+        XCTAssertTrue(try recordText().contains(O5G7TypeExperiment.replaceStep))
+    }
+
+    func testReplaceRunsAfterStepTwoStoredTheFirstIdentity() throws {
+        desired = 7
+        try sendBatch(typeSetAtActivation: true)
+        cgm = 7; sent = ("5678", "567856785678")
+        requests.removeAll()
+        try replace()
+        XCTAssertEqual(writes, [batch])
+        XCTAssertEqual(try phase("batch.json"), "stored")
+        XCTAssertEqual(try phase("replace.json"), "replaced")
+    }
+
+    func testReplaceRunsOnce() throws {
+        podWithSensor()
+        try replace()
+        requests.removeAll()
+        sent = ("9999", "999999999999")
+        XCTAssertThrowsError(try replace())
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testReplaceNeverResendsTheStoredIdentity() throws {
+        podWithSensor()
+        sent = stored!
+        XCTAssertThrowsError(try replace()) { XCTAssertTrue($0.localizedDescription.contains("already has this identity")) }
+        XCTAssertTrue(writes.isEmpty)
+        // Stopped before the write, so it may run again with a different identity.
+        sent = ("5678", "567856785678")
+        try replace()
+        XCTAssertEqual(writes, [batch])
+    }
+
+    func testReplaceConditionsStopBeforeTheWrite() throws {
+        let cases: [(String, () -> Void)] = [
+            ("no identity", { self.stored = nil }),
+            ("placeholder record", { self.stored = ("0000", "000000000000") }),
+            ("no G7 configured", { self.cgm = 1 }),
+            ("control not enabled", { self.control = 255 }),
+            ("desired type not G7", { self.desired = 0 }),
+            ("not Manual", { self.mode = 2 }),
+            ("bolus running", { self.delivery = 5 }),
+            ("faulted", { self.fault = 0xe2 }),
+        ]
+        for (index, (name, change)) in cases.enumerated() {
+            podWithSensor()
+            change()
+            requests.removeAll()
+            XCTAssertThrowsError(try replace(target: "pod-\(index)"), name)
+            XCTAssertTrue(writes.isEmpty, name)
+        }
+    }
+
+    func testRejectedReplacementIsNeverRepeated() throws {
+        podWithSensor()
+        batchReply = "0,ES4.1=-18"; batchStores = false
+        XCTAssertThrowsError(try replace()) { XCTAssertTrue($0.localizedDescription.contains("-18")) }
+        XCTAssertEqual(try phase("replace.json"), "stopped")
+        requests.removeAll()
+        XCTAssertThrowsError(try replace())
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testLostReplacementReplyIsNotRepeated() throws {
+        podWithSensor()
+        failNext = "SE4.2"
+        XCTAssertThrowsError(try replace())
+        XCTAssertEqual(try phase("replace.json"), "stopped")
+        requests.removeAll()
+        XCTAssertThrowsError(try replace())
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testReplacementNotReadBackStops() throws {
+        podWithSensor()
+        batchStores = false
+        XCTAssertThrowsError(try replace()) { XCTAssertTrue($0.localizedDescription.contains("did not read back the new identity")) }
+        XCTAssertEqual(try phase("replace.json"), "stopped")
+    }
+
+    func testInvalidReplacementInputSendsNothing() throws {
+        podWithSensor()
+        sent = ("12a4", "567856785678")
+        XCTAssertThrowsError(try replace())
+        XCTAssertTrue(requests.isEmpty)
+        XCTAssertNil(try phase("replace.json"))
     }
 }

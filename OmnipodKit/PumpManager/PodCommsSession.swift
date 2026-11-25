@@ -1151,6 +1151,16 @@ class PodCommsSession: MessageTransportDelegate {
             detailedStatus: { try self.getDetailedStatus().data })
     }
 
+    /// Experimental G7 type experiment, step 3: replace the stored identity. See O5G7TypeExperiment.
+    func replaceO5G7Identity(pairingCode: String, serialNumber: String) throws -> String {
+        try checkO5ExperimentPod()
+        return try O5G7TypeExperiment.replaceIdentity(target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+            pairingCode: pairingCode, serialNumber: serialNumber,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
     private func checkO5ExperimentPod() throws {
         assertOnSessionQueue()
         guard podState.podType.isO5, podState.setupProgress == .completed, podState.fault == nil,

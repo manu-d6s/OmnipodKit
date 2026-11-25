@@ -27,6 +27,7 @@ protocol DiagnosticCommands {
     func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String
     func setO5G7DesiredType() async throws -> String
     func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) async throws -> String
+    func replaceO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String
 }
 
 struct PodDiagnosticsView: View  {
@@ -78,6 +79,9 @@ struct PodDiagnosticsView: View  {
                     setType: { try await diagnosticCommands.setO5G7DesiredType() },
                     sendBatch: { code, serial in
                         try await diagnosticCommands.sendO5G7IdentityBatchAfterType(pairingCode: code, serialNumber: serial)
+                    },
+                    replaceIdentity: { code, serial in
+                        try await diagnosticCommands.replaceO5G7Identity(pairingCode: code, serialNumber: serial)
                     })) {
                     FrameworkLocalText("Experimental: G7 Type, Then Identity", comment: "Text for the experimental G7 type experiment navigation link")
                         .foregroundColor(Color.primary)

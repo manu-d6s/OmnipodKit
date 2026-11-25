@@ -6,12 +6,13 @@
 import SwiftUI
 import LoopKitUI
 
-/// Experimental: the two steps of O5G7TypeExperiment, each confirmed separately.
+/// Experimental: the steps of O5G7TypeExperiment, each confirmed separately.
 struct O5G7TypeExperimentView: View {
     var setType: () async throws -> String
     var sendBatch: (_ pairingCode: String, _ serialNumber: String) async throws -> String
+    var replaceIdentity: (_ pairingCode: String, _ serialNumber: String) async throws -> String
 
-    private enum Pending { case type, batch }
+    private enum Pending { case type, batch, replace }
 
     @State private var pairingCode = ""
     @State private var serialNumber = ""
@@ -19,6 +20,7 @@ struct O5G7TypeExperimentView: View {
     @State private var running: Pending?
     @State private var typeResult = ""
     @State private var batchResult = ""
+    @State private var replaceResult = ""
 
     private var inputIsValid: Bool {
         pairingCode.count == 4 && serialNumber.count == 12
@@ -48,15 +50,24 @@ struct O5G7TypeExperimentView: View {
                     Text(batchResult).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            Section(header: Text("Replace the sensor"), footer: Text("For a Pod that already receives a G7: enter the new sensor's pairing code and serial above. Sends the same batch with the new identity, as the official app does for a new sensor, once per Pod. Never re-sends the stored identity. The Pod may fault.")) {
+                button(running == .replace ? "Replacing…" : "Replace G7 Identity",
+                       disabled: !inputIsValid || running != nil || !replaceResult.isEmpty) {
+                    confirming = .replace
+                }
+                if !replaceResult.isEmpty {
+                    Text(replaceResult).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .insetGroupedListStyle()
         .navigationTitle("G7 Type, Then Identity")
         .alert(isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } })) {
             let step = confirming
             return Alert(
-                title: Text(step == .type ? "Set desired type G7?" : "Send the identity batch?"),
+                title: Text(step == .type ? "Set desired type G7?" : step == .batch ? "Send the identity batch?" : "Replace the G7 identity?"),
                 message: Text("Once sent, this step won't be sent again for this Pod."),
-                primaryButton: .destructive(Text(step == .type ? "Set" : "Send")) { if let step { start(step) } },
+                primaryButton: .destructive(Text(step == .type ? "Set" : step == .batch ? "Send" : "Replace")) { if let step { start(step) } },
                 secondaryButton: .cancel()
             )
         }
@@ -81,11 +92,19 @@ struct O5G7TypeExperimentView: View {
         Task { @MainActor in
             let text: String
             do {
-                text = step == .type ? try await setType() : try await sendBatch(code, serial)
+                switch step {
+                case .type: text = try await setType()
+                case .batch: text = try await sendBatch(code, serial)
+                case .replace: text = try await replaceIdentity(code, serial)
+                }
             } catch {
                 text = error.localizedDescription
             }
-            if step == .type { typeResult = text } else { batchResult = text }
+            switch step {
+            case .type: typeResult = text
+            case .batch: batchResult = text
+            case .replace: replaceResult = text
+            }
             running = nil
         }
     }

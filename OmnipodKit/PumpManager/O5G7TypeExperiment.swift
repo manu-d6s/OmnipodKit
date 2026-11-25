@@ -19,6 +19,10 @@ import Foundation
 /// with G7), step 2 runs without step 1. That is the official add-G7 batch on a Pod
 /// activated with G7 selected but no identity.
 ///
+/// 3. `replaceIdentity`: on a Pod that already has a G7 identity, send the same batch with
+///    a different sensor's identity, as the official app does when a new G7 is added to a
+///    running Pod, then read back the new identity. Independent of steps 1 and 2.
+///
 /// Each step has its own per-Pod record. Every exchange is saved before it is sent. A
 /// step that reached its write is never sent again for that Pod, whatever the outcome; a
 /// step that stopped before its write is kept as an earlier attempt and may be run again.
@@ -55,6 +59,7 @@ enum O5G7TypeExperiment {
 
     static let typeStep = "set desired type"
     static let batchStep = "identity batch"
+    static let replaceStep = "replace identity"
     /// Desired sensor type (key 1) = 7, G7. Control is already enabled, so only the
     /// differing field is written, as the official app does.
     static let desiredTypeRequest = Data("SE4.2=".utf8) + Data([0, 2, 1, 7])
@@ -81,10 +86,10 @@ enum O5G7TypeExperiment {
             && !record.exchanges.contains { $0.request.starts(with: Data("SE".utf8)) }
     }
 
-    /// Both steps' records as JSON, earlier attempts included, or nil if nothing was run.
+    /// Every step's record as JSON, earlier attempts included, or nil if nothing was run.
     static func record(target: String, directory: URL? = nil) throws -> String? {
         var parts: [String] = []
-        for (step, file) in [(typeStep, "type.json"), (batchStep, "batch.json")] {
+        for (step, file) in [(typeStep, "type.json"), (batchStep, "batch.json"), (replaceStep, "replace.json")] {
             let lease = try lease(target, file, directory)
             if let current = try load(lease) {
                 parts.append("\(step):\n" + String(decoding: try O5RecordLease.encode(current), as: UTF8.self))
@@ -304,6 +309,67 @@ enum O5G7TypeExperiment {
             }
             try s.setPhase("stored")
             return "Identity accepted and stored. CGM type \(O5CgmStatusReport.cgmTypeName(status.cgmType)). Glucose: \(status.egv.map { "\($0) mg/dL" } ?? "none yet"). Use Read O5 CGM Status to follow the sensor."
+        }
+    }
+
+    // MARK: - Step 3: replace the identity
+
+    /// Runs on the caller's Pod session queue. Returns a summary.
+    static func replaceIdentity(target: String, firmware: String, bleFirmware: String,
+                                pairingCode: String, serialNumber: String, directory: URL? = nil,
+                                send: (Data, String) throws -> Data,
+                                detailedStatus: () throws -> Data) throws -> String {
+        let step = replaceStep
+        let batch: Data
+        do {
+            batch = try O5G7Identity.batchRequest(pairingCode: pairingCode, serialNumber: serialNumber)
+        } catch {
+            throw Stopped(step: step, reason: (error as? O5G7Identity.Stopped)?.reason ?? error.localizedDescription)
+        }
+        let (lease, record) = try begin(step: step, file: "replace.json", target: target, firmware: firmware,
+                                        bleFirmware: bleFirmware, pairingCode: pairingCode, serialNumber: serialNumber,
+                                        directory: directory)
+        return try run(step: step, lease: lease, record: record, send: send, detailedStatus: detailedStatus) { s in
+            let before = try s.status(step)
+            guard before.cgmType == 7 else {
+                throw Stopped(step: step, reason: "expected CGM type 7, G7 (CGM type \(before.cgmType))")
+            }
+            let interface = try s.interface()
+            guard interface.control == 0, interface.desiredSensorType == 7 else {
+                throw Stopped(step: step, reason: "expected control enabled and desired type 7 (\(interface))")
+            }
+            let current = try s.sensorInfo()
+            guard current.hasIdentity else {
+                throw Stopped(step: step, reason: "the Pod has no sensor identity to replace")
+            }
+            // Re-sending the stored identity has unknown effects; this step only changes it.
+            guard !current.matches(pairingCode: pairingCode, serialNumber: serialNumber) else {
+                throw Stopped(step: step, reason: "the Pod already has this identity")
+            }
+
+            let reply = try s.exchange(batch, O5G7Identity.batchResponsePrefix, true)
+            let results: (enable: Data, identity: Data)
+            do {
+                results = try O5G7Identity.batchResults(reply)
+            } catch {
+                throw Stopped(step: step, reason: (error as? O5G7Identity.Stopped)?.reason ?? error.localizedDescription)
+            }
+            try O5AidReplyCheck.extendedSet(results.enable, responsePrefix: "ES4.2=")
+            try O5AidReplyCheck.extendedSet(results.identity, responsePrefix: "ES4.1=")
+            try s.setPhase("sent")
+
+            let after = try s.interface()
+            try s.observe("after the batch: \(after)")
+            guard try s.sensorInfo().matches(pairingCode: pairingCode, serialNumber: serialNumber) else {
+                throw Stopped(step: step, reason: "the Pod did not read back the new identity")
+            }
+            let status = try s.status(step)
+            try s.observe("CGM type after the batch: \(status.cgmType), glucose \(status.egv.map { String($0) } ?? "none")")
+            guard after.control == 0, after.desiredSensorType == 7 else {
+                throw Stopped(step: step, reason: "new identity stored, but the interface reads back \(after)")
+            }
+            try s.setPhase("replaced")
+            return "New identity accepted and stored in place of the previous one. CGM type \(O5CgmStatusReport.cgmTypeName(status.cgmType)). Glucose: \(status.egv.map { "\($0) mg/dL" } ?? "none yet"). Use Read O5 CGM Status to follow the new sensor."
         }
     }
 }

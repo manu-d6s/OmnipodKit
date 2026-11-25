@@ -2220,6 +2220,13 @@ extension OmniPumpManager {
         }
     }
 
+    /// Experimental G7 type experiment, step 3. See O5G7TypeExperiment.
+    func replaceO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String {
+        try await runO5Experiment(withName: "Replace O5 G7 Identity") {
+            try $0.replaceO5G7Identity(pairingCode: pairingCode, serialNumber: serialNumber)
+        }
+    }
+
     private func runO5Experiment(withName name: String, _ block: @escaping (PodCommsSession) throws -> String) async throws -> String {
         guard self.hasActivePod else {
             throw OmniPumpManagerError.noPodPaired
