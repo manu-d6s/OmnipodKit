@@ -401,6 +401,7 @@ public class OmniPumpManager: RileyLinkPumpManager {
     func omnipodHeartbeatDidFire() {
         // A pump-provided heartbeat wake (delayed-connect probe) completed — run a Loop cycle. Loop's
         // resulting status/dose commands connect on demand (which preempts the re-armed probe).
+        readPodGlucoseOnHeartbeat()
         issueHeartbeatIfNeeded()
     }
 

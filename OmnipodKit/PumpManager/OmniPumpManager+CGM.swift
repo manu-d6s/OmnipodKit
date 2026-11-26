@@ -6,6 +6,7 @@
 import Foundation
 import HealthKit
 import LoopKit
+import UIKit
 
 /// What the Pod last reported about its G7, and the newest reading already passed on.
 struct O5PodGlucoseState {
@@ -62,6 +63,25 @@ extension OmniPumpManager {
         return CGMManagerStatus(hasValidSensorSession: glucose.latest?.hasValidSensorSession ?? false,
                                 lastCommunicationDate: glucose.lastReadDate,
                                 device: device(for: state))
+    }
+
+    /// Reads the Pod's glucose on a heartbeat wake and passes a new reading to the CGM manager.
+    /// The wake is the app's only chance to run while the phone is locked, and a host may do
+    /// nothing on the heartbeat itself, so the read happens here, under a background task.
+    func readPodGlucoseOnHeartbeat() {
+        guard podServesAsCGM, let cgm = O5PodCGMLink.shared.cgm else { return }
+        DispatchQueue.main.async {
+            var task = UIBackgroundTaskIdentifier.invalid
+            let end = {
+                DispatchQueue.main.async {
+                    guard task != .invalid else { return }
+                    UIApplication.shared.endBackgroundTask(task)
+                    task = .invalid
+                }
+            }
+            task = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on heartbeat", expirationHandler: end)
+            cgm.fetchNewDataIfNeeded { _ in end() }
+        }
     }
 
     /// Reads G3.12 for the CGM and returns its reading if it was not passed on before.
