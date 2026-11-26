@@ -72,15 +72,14 @@ extension OmniPumpManager {
         guard podServesAsCGM, let cgm = O5PodCGMLink.shared.cgm else { return }
         DispatchQueue.main.async {
             var task = UIBackgroundTaskIdentifier.invalid
+            // Runs on the main queue; the expiration handler must end the task before it returns.
             let end = {
-                DispatchQueue.main.async {
-                    guard task != .invalid else { return }
-                    UIApplication.shared.endBackgroundTask(task)
-                    task = .invalid
-                }
+                guard task != .invalid else { return }
+                UIApplication.shared.endBackgroundTask(task)
+                task = .invalid
             }
             task = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on heartbeat", expirationHandler: end)
-            cgm.fetchNewDataIfNeeded { _ in end() }
+            cgm.fetchNewDataIfNeeded { _ in DispatchQueue.main.async(execute: end) }
         }
     }
 
