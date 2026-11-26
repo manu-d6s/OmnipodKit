@@ -58,6 +58,22 @@ struct O5PodGlucose: Equatable {
         var syncIdentifier: String { "O5-G7 \(referenceTime)" }
     }
 
+    /// The G7 session in phone time, from the sensor's clock (time since it was started)
+    /// and its session length, which includes the grace period after expiry.
+    struct Session: Equatable {
+        static let gracePeriod: TimeInterval = .hours(12)
+        static let warmupDuration: TimeInterval = .minutes(27)
+
+        let activatedAt: Date
+        let length: TimeInterval
+
+        var expiresAt: Date { activatedAt.addingTimeInterval(length - Self.gracePeriod) }
+        var endsAt: Date { activatedAt.addingTimeInterval(length) }
+        var warmupEndsAt: Date { activatedAt.addingTimeInterval(Self.warmupDuration) }
+        /// The session without its grace period.
+        var lifetime: TimeInterval { length - Self.gracePeriod }
+    }
+
     static let g7SensorType: UInt8 = 7
 
     let sensorState: SensorState
@@ -65,6 +81,9 @@ struct O5PodGlucose: Equatable {
     let algorithmState: UInt8?
     /// A reading the app may use: a G7 glucose with the algorithm in state ok.
     let reading: Reading?
+    /// The running session, while the sensor is past pairing and still in its session.
+    /// Not derived once the session has ended, because the sensor clock then stops.
+    let session: Session?
 
     /// - Parameter receivedAt: phone time when the reply arrived. Reading times are
     ///   converted from the Pod clock relative to this, so Pod clock offset does not matter.
@@ -73,6 +92,7 @@ struct O5PodGlucose: Equatable {
             sensorState = .noSensor
             algorithmState = nil
             reading = nil
+            session = nil
             return
         }
         algorithmState = status.g7?.algorithmState
@@ -87,6 +107,26 @@ struct O5PodGlucose: Equatable {
                               glucose: glucose, trendRate: rate)
         } else {
             reading = nil
+        }
+
+        // The sensor time belongs to the latest sensor data: the reading, or else the
+        // reference time the Pod reports with it.
+        let sensorDataDate: Date
+        if let reading {
+            sensorDataDate = reading.date
+        } else if status.referenceTime > 0, status.podTime >= status.referenceTime {
+            sensorDataDate = receivedAt.addingTimeInterval(-TimeInterval(status.podTime - status.referenceTime))
+        } else {
+            sensorDataDate = receivedAt
+        }
+        if [.warmup, .ok, .temporaryIssue].contains(sensorState), let g7 = status.g7,
+           g7.sessionDuration > Int32(Session.gracePeriod), g7.sessionDuration <= Int32(TimeInterval.hours(24 * 30)),
+           g7.sensorTimestamp >= 0, g7.sensorTimestamp <= g7.sessionDuration
+        {
+            session = Session(activatedAt: sensorDataDate.addingTimeInterval(-TimeInterval(g7.sensorTimestamp)),
+                              length: TimeInterval(g7.sessionDuration))
+        } else {
+            session = nil
         }
     }
 

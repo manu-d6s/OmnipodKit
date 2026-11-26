@@ -12,6 +12,23 @@ struct O5PodGlucoseState {
     var latest: O5PodGlucose?
     var lastReadDate: Date?
     var lastPublishedReferenceTime: UInt32?
+    /// The sensor's session, kept once it has ended and cleared when a sensor is paired.
+    /// Its start stays as first derived: each read derives it again, a few seconds apart.
+    var session: O5PodGlucose.Session?
+
+    mutating func update(_ glucose: O5PodGlucose, readAt: Date) {
+        latest = glucose
+        lastReadDate = readAt
+        if let new = glucose.session {
+            if let old = session, abs(new.activatedAt.timeIntervalSince(old.activatedAt)) < .hours(1) {
+                session = O5PodGlucose.Session(activatedAt: old.activatedAt, length: new.length)
+            } else {
+                session = new
+            }
+        } else if [.noSensor, .pairing].contains(glucose.sensorState) {
+            session = nil
+        }
+    }
 }
 
 /// The pump manager and the CGM manager that serves its Pod's G7 readings find each
@@ -93,8 +110,7 @@ extension OmniPumpManager {
         var newReading: O5PodGlucose.Reading?
         lockedPodGlucose.mutate { value in
             previous = value
-            value.latest = glucose
-            value.lastReadDate = receivedAt
+            value.update(glucose, readAt: receivedAt)
             if let reading = glucose.reading, reading.referenceTime != value.lastPublishedReferenceTime {
                 value.lastPublishedReferenceTime = reading.referenceTime
                 newReading = reading

@@ -15,6 +15,29 @@ struct O5PodCGMStatusHighlight: DeviceStatusHighlight {
     let state: DeviceStatusHighlightState
 }
 
+struct O5PodCGMLifecycleProgress: DeviceLifecycleProgress {
+    let percentComplete: Double
+    let progressState: DeviceLifecycleProgressState
+}
+
+extension O5PodGlucose.Session {
+    /// Progress shown in the last 48 hours of the lifetime and through the grace period,
+    /// as for a G7 read directly.
+    func lifecycleProgress(ended: Bool, now: Date = Date()) -> DeviceLifecycleProgress? {
+        if ended || now >= endsAt {
+            return O5PodCGMLifecycleProgress(percentComplete: 1, progressState: .critical)
+        }
+        if now >= expiresAt {
+            let remaining = endsAt.timeIntervalSince(now)
+            return O5PodCGMLifecycleProgress(percentComplete: 1 - remaining / Self.gracePeriod, progressState: .critical)
+        }
+        let remaining = expiresAt.timeIntervalSince(now)
+        guard remaining < .hours(48) else { return nil }
+        return O5PodCGMLifecycleProgress(percentComplete: 1 - remaining / lifetime,
+                                         progressState: remaining < .hours(24) ? .warning : .normalCGM)
+    }
+}
+
 extension OmniPodG7CGMManager: CGMManagerUI {
     public static var onboardingImage: UIImage? { nil }
 
@@ -53,7 +76,10 @@ extension OmniPodG7CGMManager: CGMManagerUI {
 
     public var cgmStatusBadge: DeviceStatusBadge? { nil }
 
-    public var cgmLifecycleProgress: DeviceLifecycleProgress? { nil }
+    public var cgmLifecycleProgress: DeviceLifecycleProgress? {
+        guard let glucose = O5PodCGMLink.shared.pump?.lockedPodGlucose.value, let session = glucose.session else { return nil }
+        return session.lifecycleProgress(ended: glucose.latest?.sensorState == .ended)
+    }
 
     public var cgmStatusHighlight: DeviceStatusHighlight? {
         guard O5PodCGMLink.shared.pump != nil else {
@@ -100,6 +126,17 @@ struct OmniPodG7CGMSettingsView: View {
                 if let reading = glucose?.latest?.reading {
                     row(LocalizedString("Last reading", comment: "Label for the latest reading"),
                         "\(displayGlucosePreference.format(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: Double(reading.clampedGlucose)))) · \(reading.date.formatted(date: .omitted, time: .shortened))")
+                }
+                if let session = glucose?.session {
+                    row(LocalizedString("Sensor started", comment: "Label for when the G7 was started"),
+                        session.activatedAt.formatted(date: .abbreviated, time: .shortened))
+                    if session.expiresAt > Date() {
+                        row(LocalizedString("Sensor expires", comment: "Label for when the G7 lifetime ends"),
+                            session.expiresAt.formatted(date: .abbreviated, time: .shortened))
+                    } else {
+                        row(LocalizedString("Grace period ends", comment: "Label for when the G7 stops after its grace period"),
+                            session.endsAt.formatted(date: .abbreviated, time: .shortened))
+                    }
                 }
                 if let date = glucose?.lastReadDate {
                     row(LocalizedString("Last read from Pod", comment: "Label for the last Pod read"), date.formatted(date: .omitted, time: .shortened))

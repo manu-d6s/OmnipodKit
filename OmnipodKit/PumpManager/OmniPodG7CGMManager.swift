@@ -38,6 +38,8 @@ public final class OmniPodG7CGMManager: CGMManager {
             "pump: \(O5PodCGMLink.shared.pump == nil ? "none" : "linked")",
             "sensorState: \(glucose?.latest.map { String(describing: $0.sensorState) } ?? "unknown")",
             "lastReadDate: \(String(describing: glucose?.lastReadDate))",
+            "sensorActivatedAt: \(String(describing: glucose?.session?.activatedAt))",
+            "sensorExpiresAt: \(String(describing: glucose?.session?.expiresAt))",
         ].joined(separator: "\n")
     }
 
@@ -71,6 +73,23 @@ public final class OmniPodG7CGMManager: CGMManager {
 
     /// Whether the app has this manager set up as its CGM.
     var isInUse: Bool { delegate.delegate != nil }
+
+    // MARK: - Sensor session
+
+    var session: O5PodGlucose.Session? { O5PodCGMLink.shared.pump?.lockedPodGlucose.value.session }
+
+    public var sensorActivatedAt: Date? { session?.activatedAt }
+
+    /// End of the sensor's lifetime, before the grace period.
+    public var sensorExpiresAt: Date? { session?.expiresAt }
+
+    /// End of the grace period, when the sensor stops sending readings.
+    public var sensorEndsAt: Date? { session?.endsAt }
+
+    /// End of warmup, while the sensor is warming up.
+    public var sensorFinishesWarmupAt: Date? {
+        O5PodCGMLink.shared.pump?.lockedPodGlucose.value.latest?.sensorState == .warmup ? session?.warmupEndsAt : nil
+    }
 
     public func fetchNewDataIfNeeded(_ completion: @escaping (CGMReadingResult) -> Void) {
         guard let pump = O5PodCGMLink.shared.pump else {
