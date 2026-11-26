@@ -70,16 +70,25 @@ extension OmniPumpManager {
     /// nothing on the heartbeat itself, so the read happens here, under a background task.
     func readPodGlucoseOnHeartbeat() {
         guard podServesAsCGM, let cgm = O5PodCGMLink.shared.cgm else { return }
-        DispatchQueue.main.async {
-            var task = UIBackgroundTaskIdentifier.invalid
-            // Runs on the main queue; the expiration handler must end the task before it returns.
-            let end = {
-                guard task != .invalid else { return }
-                UIApplication.shared.endBackgroundTask(task)
-                task = .invalid
-            }
-            task = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on heartbeat", expirationHandler: end)
-            cgm.fetchNewDataIfNeeded { _ in DispatchQueue.main.async(execute: end) }
+        // The task begins before any hop and ends once, from the read's completion or on expiry.
+        // An expiry before the identifier is stored ends the task here and skips the read.
+        let task = Locked((id: UIBackgroundTaskIdentifier.invalid, finished: false))
+        let end = {
+            var id = UIBackgroundTaskIdentifier.invalid
+            task.mutate { id = $0.id; $0 = (.invalid, true) }
+            if id != .invalid { UIApplication.shared.endBackgroundTask(id) }
+        }
+        let id = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on heartbeat", expirationHandler: end)
+        var alreadyFinished = false
+        task.mutate { if $0.finished { alreadyFinished = true } else { $0.id = id } }
+        if alreadyFinished {
+            if id != .invalid { UIApplication.shared.endBackgroundTask(id) }
+            return
+        }
+        // The heartbeat fires on the Bluetooth manager queue, and starting a Pod session can sync
+        // onto that queue, so the read starts elsewhere.
+        DispatchQueue.global(qos: .userInitiated).async {
+            cgm.fetchNewDataIfNeeded { _ in end() }
         }
     }
 
