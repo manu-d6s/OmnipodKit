@@ -123,6 +123,7 @@ public class OmniPumpManager: RileyLinkPumpManager {
     // Common initialization used after all mandatory fields are initialized
     fileprivate func finishInit(podType: PodType)
     {
+        O5PodCGMLink.shared.pump = self
         self.podComms.delegate = self
         self.podComms.messageLogger = self
 
@@ -185,8 +186,6 @@ public class OmniPumpManager: RileyLinkPumpManager {
     private let podStateObservers = WeakSynchronizedSet<PodStateObserver>()
 
     private let pumpDelegate = WeakSynchronizedDelegate<PumpManagerDelegate>()
-
-    let cgmDelegate = WeakSynchronizedDelegate<CGMManagerDelegate>()
 
     /// The latest G7 state and reading from the Pod's G3.12 status, when the Pod serves as the CGM.
     let lockedPodGlucose = Locked<O5PodGlucoseState>(O5PodGlucoseState())
@@ -2623,7 +2622,6 @@ extension OmniPumpManager: PumpManager {
         }
         set {
             pumpDelegate.queue = newValue
-            cgmDelegate.queue = newValue
         }
     }
 

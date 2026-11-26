@@ -14,70 +14,53 @@ struct O5PodGlucoseState {
     var lastPublishedReferenceTime: UInt32?
 }
 
-struct O5PodGlucoseDisplay: GlucoseDisplayable {
-    let isStateValid: Bool
-    let trendType: GlucoseTrend?
-    let trendRate: HKQuantity?
-    let isLocal = true
-    let glucoseRangeCategory: GlucoseRangeCategory? = nil
+/// The pump manager and the CGM manager that serves its Pod's G7 readings find each
+/// other here. The app creates each of them on its own, in either order.
+final class O5PodCGMLink {
+    static let shared = O5PodCGMLink()
 
-    init(_ glucose: O5PodGlucose) {
-        isStateValid = glucose.sensorState == .ok
-        trendType = glucose.reading?.trend
-        trendRate = glucose.reading?.trendRate.map { HKQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: $0) }
+    private let lock = NSLock()
+    private weak var _pump: OmniPumpManager?
+    private weak var _cgm: OmniPodG7CGMManager?
+
+    var pump: OmniPumpManager? {
+        get { lock.withLock { _pump } }
+        set { lock.withLock { _pump = newValue } }
+    }
+
+    var cgm: OmniPodG7CGMManager? {
+        get { lock.withLock { _cgm } }
+        set { lock.withLock { _cgm = newValue } }
     }
 }
 
-/// An O5 Pod that reads a Dexcom G7 itself serves as the app's CGM. Readings come from the
-/// G3.12 AID status, read after each pump status and on request.
-extension OmniPumpManager: CGMManager {
-    public var cgmManagerDelegate: CGMManagerDelegate? {
-        get { cgmDelegate.delegate }
-        set { cgmDelegate.delegate = newValue }
+extension OmniPumpManager {
+    /// Whether the app uses this Pod's G7 readings as its CGM.
+    var podServesAsCGM: Bool {
+        state.podType.isO5 && O5PodCGMLink.shared.cgm?.isInUse == true
     }
 
-    /// The Pod does not wake the app by itself; the pump heartbeat does that.
-    public var providesBLEHeartbeat: Bool { false }
-
-    public var managedDataInterval: TimeInterval? { nil }
-
-    public var shouldSyncToRemoteService: Bool { true }
-
-    public var glucoseDisplay: GlucoseDisplayable? {
-        lockedPodGlucose.value.latest.map(O5PodGlucoseDisplay.init)
-    }
-
-    public var cgmManagerStatus: CGMManagerStatus {
+    var podCGMStatus: CGMManagerStatus {
         let glucose = lockedPodGlucose.value
         return CGMManagerStatus(hasValidSensorSession: glucose.latest?.hasValidSensorSession ?? false,
                                 lastCommunicationDate: glucose.lastReadDate,
                                 device: device(for: state))
     }
 
-    /// Whether the app uses this Pod as its CGM.
-    var podServesAsCGM: Bool {
-        state.podType.isO5 && cgmDelegate.delegate != nil
-    }
-
-    public func fetchNewDataIfNeeded(_ completion: @escaping (CGMReadingResult) -> Void) {
-        guard podServesAsCGM, hasActivePod, let podState = state.podState, !podState.isFaulted,
+    /// Reads G3.12 for the CGM and returns readings newer than `newerThan` not passed on before.
+    func fetchPodGlucose(newerThan: Date?, completion: @escaping (CGMReadingResult) -> Void) {
+        guard state.podType.isO5, hasActivePod, let podState = state.podState, !podState.isFaulted,
               podState.unacknowledgedCommand == nil else {
             completion(.noData)
             return
         }
-        let newerThan = cgmDelegate.call { $0?.startDateToFilterNewData(for: self) }
-        if let newerThan, newerThan.timeIntervalSince(dateGenerator()) > -.minutes(4.5) {
-            completion(.noData)
-            return
-        }
-
         runSession(withName: "Read Pod glucose") { result in
             switch result {
             case .success(let session):
                 do {
                     let reply = try session.sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
                     let samples = self.processPodGlucose(reply, receivedAt: self.dateGenerator())
-                        .filter { newerThan == nil || $0.date > newerThan! }
+                        .filter { sample in newerThan.map { sample.date > $0 } ?? true }
                     completion(samples.isEmpty ? .noData : .newData(samples))
                 } catch {
                     completion(.error(error))
@@ -88,13 +71,11 @@ extension OmniPumpManager: CGMManager {
         }
     }
 
-    /// Passes a reading from a G3.12 read made for another reason on to the CGM delegate.
+    /// Passes a reading from a G3.12 read made for another reason on to the CGM manager.
     func publishPodGlucose(from reply: Data, receivedAt: Date) {
         let samples = processPodGlucose(reply, receivedAt: receivedAt)
         if !samples.isEmpty {
-            cgmDelegate.notify { delegate in
-                delegate?.cgmManager(self, hasNew: .newData(samples))
-            }
+            O5PodCGMLink.shared.cgm?.deliver(.newData(samples))
         }
     }
 
@@ -122,10 +103,7 @@ extension OmniPumpManager: CGMManager {
         }
 
         if previous.latest?.hasValidSensorSession != glucose.hasValidSensorSession {
-            let status = cgmManagerStatus
-            cgmDelegate.notify { delegate in
-                delegate?.cgmManager(self, didUpdate: status)
-            }
+            O5PodCGMLink.shared.cgm?.statusDidChange(podCGMStatus)
         }
 
         guard let reading = newReading else { return [] }
