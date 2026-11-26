@@ -186,6 +186,11 @@ public class OmniPumpManager: RileyLinkPumpManager {
 
     private let pumpDelegate = WeakSynchronizedDelegate<PumpManagerDelegate>()
 
+    let cgmDelegate = WeakSynchronizedDelegate<CGMManagerDelegate>()
+
+    /// The latest G7 state and reading from the Pod's G3.12 status, when the Pod serves as the CGM.
+    let lockedPodGlucose = Locked<O5PodGlucoseState>(O5PodGlucoseState())
+
     let log = OSLog(category: "OmniPumpManager")
 
     private var lastLoopRecommendation: Date?
@@ -582,7 +587,7 @@ extension OmniPumpManager {
         )
     }
 
-    private func device(for state: OmniPumpManagerState) -> HKDevice {
+    func device(for state: OmniPumpManagerState) -> HKDevice {
         if let podState = state.podState {
             return HKDevice(
                 name: pluginIdentifier,
@@ -1709,7 +1714,7 @@ extension OmniPumpManager {
     }
 
     // Used to serialize a set of Pod Commands for a given session - vectors to correct version
-    private func runSession(withName name: String, _ block: @escaping (_ result: PodComms.SessionRunResult) -> Void) {
+    func runSession(withName name: String, _ block: @escaping (_ result: PodComms.SessionRunResult) -> Void) {
         if let blePodComms = self.podComms as? BlePodComms {
             blePodComms.bleRunSession(withName: name, block)
         } else if let erosPodComms = self.podComms as? ErosPodComms {
@@ -1789,8 +1794,8 @@ extension OmniPumpManager {
                     let status = self.handlePodUpdatesAsNeeded(session: session, canOptimize: canOptimize)
                     completion?(.success(status))
                     // After the completion, so a slow or failed read never delays the caller.
-                    if status != nil {
-                        session.logO5AidStatusIfEnabled()
+                    if status != nil, let reply = session.readO5AidStatusAfterStatus(forGlucose: self.podServesAsCGM) {
+                        self.publishPodGlucose(from: reply, receivedAt: self.dateGenerator())
                     }
                 case .failure(let error):
                     self.evaluateStatus()
@@ -2618,6 +2623,7 @@ extension OmniPumpManager: PumpManager {
         }
         set {
             pumpDelegate.queue = newValue
+            cgmDelegate.queue = newValue
         }
     }
 

@@ -374,17 +374,25 @@ class PodCommsSession: MessageTransportDelegate {
         ], entry: entry)
     }
 
-    /// Research logging: one `G3.12` read for the Pod data log, after a fetched pump status.
-    /// Skipped unless logging is on, the Pod is an active O5 and no command is pending.
-    /// Failures are logged and never thrown.
-    func logO5AidStatusIfEnabled() {
-        guard O5PodDataLog.isEnabled, podState.podType.isO5, podState.setupProgress == .completed,
-              podState.fault == nil, podState.unacknowledgedCommand == nil else { return }
+    /// One `G3.12` read after a fetched pump status, for the Pod data log and, when the Pod
+    /// serves as the CGM, its G7 glucose. Skipped unless one of them needs it, the Pod is an
+    /// active O5 and no command is pending. Failures are logged and never thrown.
+    func readO5AidStatusAfterStatus(forGlucose: Bool) -> Data? {
+        let logging = O5PodDataLog.isEnabled
+        guard logging || forGlucose, podState.podType.isO5, podState.setupProgress == .completed,
+              podState.fault == nil, podState.unacknowledgedCommand == nil else { return nil }
         do {
             let reply = try sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
-            appendPodDataLog(O5PodDataLog.aidStatusFields(reply))
+            if logging {
+                appendPodDataLog(O5PodDataLog.aidStatusFields(reply))
+            }
+            return reply
         } catch {
-            appendPodDataLog(["kind": "aidStatus", "error": String(describing: error)])
+            if logging {
+                appendPodDataLog(["kind": "aidStatus", "error": String(describing: error)])
+            }
+            log.error("G3.12 read after status failed: %{public}@", String(describing: error))
+            return nil
         }
     }
 
