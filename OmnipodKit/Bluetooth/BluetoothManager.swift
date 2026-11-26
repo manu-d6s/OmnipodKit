@@ -817,6 +817,7 @@ class BluetoothManager: NSObject {
     func disconnectFromDevice(uuidString: String) {
         managerQueue.async {
             self.autoConnectIDs.remove(uuidString)
+            self.commandConnectInFlight = false   // no connect is owed to a discarded pod
             // Prune the discarded pod from devices[] (otherwise append-only) and drop any connection, so
             // a stale device can't be picked up later by the heartbeat/keep-alive machinery or churned
             // while pairing a new pod. (devices[] never being pruned is long-standing; this closes it.)
@@ -1763,10 +1764,11 @@ extension BluetoothManager: CBCentralManagerDelegate {
             log.default("[connectOnDemand] keep-alive — reconnecting after drop")
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] keep-alive — reconnecting after drop")
             connectForCommand(peripheral)
-        } else if holdsLinkForCGM && !isAppForeground && autoConnectIDs.contains(peripheral.identifier.uuidString) {
-            // A deliberate disconnect (a connect timeout, an unresponsive Pod) of the held link: connect
-            // again after a pause that iOS applies while the app is suspended, so it can't loop.
-            resumeScanIfNeeded()
+        } else if holdsLinkForCGM && BluetoothManager.connectOnDemandEnabled && !isAppForeground
+                    && autoConnectIDs.contains(peripheral.identifier.uuidString) {
+            // A deliberate disconnect of the held link, such as a connect timeout: connect again after a
+            // pause that iOS applies while the app is suspended, so it can't loop. No scan runs alongside,
+            // as a concurrent scan starves the connect.
             commandConnectInFlight = true
             log.default("[connectOnDemand] CGM nudge hold — reconnecting in 30s after a deliberate disconnect")
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] CGM nudge hold — reconnecting in 30s after a deliberate disconnect")
