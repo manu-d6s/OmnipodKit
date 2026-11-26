@@ -35,7 +35,7 @@ extension OmniPodG7CGMManager: CGMManagerUI {
         let hostingController = DismissibleHostingController(content: view, isModalInPresentation: true, colorPalette: colorPalette)
         hostingController.title = LocalizedString("Dexcom G7 via Omnipod 5", comment: "Title of the CGM that takes G7 readings from the Omnipod 5 Pod")
         nav.setViewControllers([hostingController], animated: false)
-        nav.navigationBar.prefersLargeTitles = true
+        nav.navigationBar.prefersLargeTitles = false
         return .userInteractionRequired(nav)
     }
 
@@ -45,7 +45,7 @@ extension OmniPodG7CGMManager: CGMManagerUI {
         hostingController.title = localizedTitle
         hostingController.navigationItem.backButtonDisplayMode = .generic
         let nav = CGMManagerSettingsNavigationViewController(rootViewController: hostingController)
-        nav.navigationBar.prefersLargeTitles = true
+        nav.navigationBar.prefersLargeTitles = false
         return nav
     }
 
