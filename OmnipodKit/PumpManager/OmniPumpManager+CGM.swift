@@ -65,11 +65,10 @@ extension OmniPumpManager {
                                 device: device(for: state))
     }
 
-    /// Reads the Pod's glucose on a Bluetooth wake (a heartbeat, a glucose nudge, a reconnect of the
-    /// held link) and passes a new reading to the CGM manager. The wake is the app's only chance to run
-    /// while the phone is locked, and a host may do nothing on it, so the read happens here, under a
-    /// background task. A nudge announces a new reading, so it skips only a reading under a minute old.
-    func readPodGlucoseOnWake(_ name: String, skippingReadingsNewerThan age: TimeInterval) {
+    /// Reads the Pod's glucose on a heartbeat wake and passes a new reading to the CGM manager.
+    /// The wake is the app's only chance to run while the phone is locked, and a host may do
+    /// nothing on the heartbeat itself, so the read happens here, under a background task.
+    func readPodGlucoseOnHeartbeat() {
         guard podServesAsCGM, let cgm = O5PodCGMLink.shared.cgm else { return }
         // The task begins before any hop and ends once, from the read's completion or on expiry.
         // An expiry before the identifier is stored ends the task here and skips the read.
@@ -79,7 +78,7 @@ extension OmniPumpManager {
             task.mutate { id = $0.id; $0 = (.invalid, true) }
             if id != .invalid { UIApplication.shared.endBackgroundTask(id) }
         }
-        let id = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on \(name)", expirationHandler: end)
+        let id = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on heartbeat", expirationHandler: end)
         var alreadyFinished = false
         task.mutate { if $0.finished { alreadyFinished = true } else { $0.id = id } }
         if alreadyFinished {
@@ -89,7 +88,7 @@ extension OmniPumpManager {
         // The heartbeat fires on the Bluetooth manager queue, and starting a Pod session can sync
         // onto that queue, so the read starts elsewhere.
         DispatchQueue.global(qos: .userInitiated).async {
-            cgm.readPod(skippingReadingsNewerThan: age) { _ in end() }
+            cgm.fetchNewDataIfNeeded { _ in end() }
         }
     }
 

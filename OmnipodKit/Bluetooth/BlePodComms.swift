@@ -73,11 +73,6 @@ class BlePodComms: PodComms {
         bluetoothManager = nil
     }
 
-    /// Connects or releases the link held for the Pod's glucose nudges, to match the setting.
-    func updateHeldLink() {
-        bluetoothManager?.updateHeldLink()
-    }
-
     /// Sets bluetoothManager's podKeepAlive value to drive the pod connection policy.
     func setPodKeepAliveKeepsConnectedInBackground(_ keepConnectedInBackground: Bool) {
         print("@@@ setting bluetoothManager.podKeepAliveKeepsConnectedInBackground to \(keepConnectedInBackground)")
@@ -763,14 +758,6 @@ extension BlePodComms: OmniConnectionDelegate {
 
     func omnipodDidDetectAlert(slots: AlertSet) {
         delegate?.omnipodDidDetectAlert(slots: slots)
-    }
-
-    func omnipodDidReceiveGlucoseNudge() {
-        delegate?.omnipodDidReceiveGlucoseNudge()
-    }
-
-    func omnipodHeldLinkDidConnect() {
-        delegate?.omnipodHeldLinkDidConnect()
     }
 
     /// Lift the fault-listener re-wake suppression once all pod alerts have cleared (OmniPumpManager

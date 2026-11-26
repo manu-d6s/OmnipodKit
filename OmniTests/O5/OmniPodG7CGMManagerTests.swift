@@ -95,14 +95,4 @@ final class OmniPodG7CGMManagerTests: XCTestCase {
         wait(for: [fetched], timeout: 5)
         withExtendedLifetime(pump) {}
     }
-
-    func testGlucoseNudgeIsRecognised() {
-        XCTAssertTrue(BlePodProfile.isGlucoseNudge(Data([0x0C, 0x00])))
-        XCTAssertTrue(BlePodProfile.isGlucoseNudge(Data([0x0C, 0x00, 0x01])))
-        XCTAssertTrue(BlePodProfile.isGlucoseNudge(Data([0xFF, 0x0C, 0x00]).dropFirst()))
-        XCTAssertFalse(BlePodProfile.isGlucoseNudge(Data([0x0C])))
-        XCTAssertFalse(BlePodProfile.isGlucoseNudge(Data([0x0C, 0x01])))
-        XCTAssertFalse(BlePodProfile.isGlucoseNudge(Data([PodCommand.SUCCESS.rawValue, 0x00])))
-        XCTAssertFalse(BlePodProfile.isGlucoseNudge(Data()))
-    }
 }
