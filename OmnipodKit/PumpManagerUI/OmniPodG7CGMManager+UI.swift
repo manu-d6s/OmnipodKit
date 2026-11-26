@@ -21,12 +21,28 @@ extension OmniPodG7CGMManager: CGMManagerUI {
     public var smallImage: UIImage? { nil }
 
     public static func setupViewController(bluetoothProvider: BluetoothProvider, displayGlucosePreference: DisplayGlucosePreference, colorPalette: LoopUIColorPalette, allowDebugFeatures: Bool, prefersToSkipUserInteraction: Bool) -> SetupUIResult<CGMManagerViewController, CGMManagerUI> {
-        .createdAndOnboarded(OmniPodG7CGMManager())
+        let nav = CGMManagerSettingsNavigationViewController()
+        let view = OmniPodG7CGMSetupView(
+            onCancel: { [weak nav] in nav?.notifyComplete() },
+            onContinue: { [weak nav] in
+                guard let nav else { return }
+                let manager = OmniPodG7CGMManager()
+                nav.cgmManagerOnboardingDelegate?.cgmManagerOnboarding(didCreateCGMManager: manager)
+                nav.cgmManagerOnboardingDelegate?.cgmManagerOnboarding(didOnboardCGMManager: manager)
+                nav.notifyComplete()
+            }
+        )
+        let hostingController = DismissibleHostingController(content: view, isModalInPresentation: true, colorPalette: colorPalette)
+        hostingController.title = LocalizedString("Dexcom G7 via Omnipod 5", comment: "Title of the CGM that takes G7 readings from the Omnipod 5 Pod")
+        nav.setViewControllers([hostingController], animated: false)
+        nav.navigationBar.prefersLargeTitles = true
+        return .userInteractionRequired(nav)
     }
 
     public func settingsViewController(bluetoothProvider: BluetoothProvider, displayGlucosePreference: DisplayGlucosePreference, colorPalette: LoopUIColorPalette, allowDebugFeatures: Bool) -> CGMManagerViewController {
         let view = OmniPodG7CGMSettingsView(cgmManager: self, displayGlucosePreference: displayGlucosePreference)
         let hostingController = DismissibleHostingController(content: view, isModalInPresentation: false, colorPalette: colorPalette)
+        hostingController.title = localizedTitle
         hostingController.navigationItem.backButtonDisplayMode = .generic
         let nav = CGMManagerSettingsNavigationViewController(rootViewController: hostingController)
         nav.navigationBar.prefersLargeTitles = true
@@ -97,7 +113,7 @@ struct OmniPodG7CGMSettingsView: View {
                 }
             }
         }
-        .navigationTitle(cgmManager.localizedTitle)
+        .navigationBarItems(trailing: Button(LocalizedString("Done", comment: "Close the CGM settings")) { dismiss() })
         .confirmationDialog(LocalizedString("Stop using the Pod's G7 readings?", comment: "Delete confirmation title"),
                             isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
             Button(LocalizedString("Delete CGM", comment: "Confirm delete"), role: .destructive) {
@@ -126,5 +142,22 @@ struct OmniPodG7CGMSettingsView: View {
             Spacer()
             Text(value).foregroundColor(.secondary)
         }
+    }
+}
+
+struct OmniPodG7CGMSetupView: View {
+    let onCancel: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        List {
+            Section(footer: Text(LocalizedString("Start the sensor with the Dexcom app first. Then give its pairing code and serial number to the Pod, which reads the sensor from then on. The Pod must be an Omnipod 5 that was activated with the early control enable.", comment: "Setup explanation for the Pod-relayed G7 CGM"))) {
+                Text(LocalizedString("Glucose readings will come from the Dexcom G7 that your Omnipod 5 Pod reads itself, instead of from a direct connection to the sensor.", comment: "Setup summary for the Pod-relayed G7 CGM"))
+            }
+            Section {
+                Button(LocalizedString("Use the Pod's G7 Readings", comment: "Button that sets up the Pod-relayed G7 CGM"), action: onContinue)
+            }
+        }
+        .navigationBarItems(leading: Button(LocalizedString("Cancel", comment: "Cancel CGM setup"), action: onCancel))
     }
 }
