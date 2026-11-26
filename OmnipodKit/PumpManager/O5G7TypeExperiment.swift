@@ -119,6 +119,29 @@ enum O5G7TypeExperiment {
         return record.phase == "stopped" && record.reason == placeholderStopReason
     }
 
+    /// What the step records allow next on one Pod.
+    struct Progress: Equatable {
+        /// When the type write of a verified step 1 was sent, or nil.
+        var typeVerifiedWriteDate: Date?
+        /// Whether each step may still run: it has no record, or only one that stopped before its write.
+        var typeAvailable: Bool
+        var batchAvailable: Bool
+        var replaceAvailable: Bool
+    }
+
+    static func progress(target: String, directory: URL? = nil) throws -> Progress {
+        func record(_ file: String) throws -> Record? { try load(lease(target, file, directory)) }
+        func available(_ record: Record?) -> Bool { record.map(stoppedBeforeTheWrite) ?? true }
+        let type = try record("type.json")
+        var typeWriteDate: Date?
+        if let type, type.phase == "verified" || (type.phase == "stopped" && type.reason == placeholderStopReason) {
+            typeWriteDate = type.exchanges.first { $0.request == desiredTypeRequest }?.started
+        }
+        return Progress(typeVerifiedWriteDate: typeWriteDate, typeAvailable: available(type),
+                        batchAvailable: available(try record("batch.json")),
+                        replaceAvailable: available(try record("replace.json")))
+    }
+
     // MARK: - Running one step
 
     /// Opens the step's record: refuses if an earlier attempt reached its write, sets

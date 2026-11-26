@@ -427,4 +427,43 @@ final class O5G7TypeExperimentTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
         XCTAssertNil(try phase("replace.json"))
     }
+
+    // MARK: - Progress for the Add G7 screen
+
+    private func progress() throws -> O5G7TypeExperiment.Progress {
+        try O5G7TypeExperiment.progress(target: target, directory: root)
+    }
+
+    func testProgressFollowsTheSteps() throws {
+        XCTAssertEqual(try progress(), O5G7TypeExperiment.Progress(typeVerifiedWriteDate: nil, typeAvailable: true,
+                                                                  batchAvailable: true, replaceAvailable: true))
+        let start = Date()
+        try setType()
+        let afterType = try progress()
+        XCTAssertFalse(afterType.typeAvailable)
+        XCTAssertTrue(afterType.batchAvailable)
+        let written = try XCTUnwrap(afterType.typeVerifiedWriteDate)
+        XCTAssertTrue(written >= start.addingTimeInterval(-1) && written <= Date())
+        try sendBatch()
+        XCTAssertFalse(try progress().batchAvailable)
+        XCTAssertTrue(try progress().replaceAvailable)
+        cgm = 7
+        sent = ("5678", "567856785678")
+        try replace()
+        XCTAssertFalse(try progress().replaceAvailable)
+    }
+
+    func testProgressKeepsAStepThatStoppedBeforeItsWriteAvailable() throws {
+        failNext = "G3.12"
+        XCTAssertThrowsError(try setType())
+        XCTAssertEqual(try progress().typeAvailable, true)
+        XCTAssertNil(try progress().typeVerifiedWriteDate)
+    }
+
+    func testProgressHasNoVerifiedTypeAfterARejectedTypeWrite() throws {
+        typeReply = "-17"; typeApplies = false
+        XCTAssertThrowsError(try setType())
+        XCTAssertFalse(try progress().typeAvailable)
+        XCTAssertNil(try progress().typeVerifiedWriteDate)
+    }
 }

@@ -1146,15 +1146,9 @@ class PodCommsSession: MessageTransportDelegate {
     /// Experimental G7 type experiment, step 2: the identity batch. See O5G7TypeExperiment.
     func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) throws -> String {
         try checkO5ExperimentPod()
-        var typeSetAtActivation = false
-        if let id = podState.earlyControlEnableID, podState.earlyControlDesiredSensorType == 7 {
-            typeSetAtActivation = (try? O5EarlyControlEnable.verifiedDesiredSensorType(id: id,
-                target: podState.earlyControlTarget, firmware: podState.firmwareVersion,
-                bleFirmware: podState.iFirmwareVersion)) == 7
-        }
         return try O5G7TypeExperiment.sendIdentityBatch(target: podState.earlyControlTarget,
             firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
-            pairingCode: pairingCode, serialNumber: serialNumber, typeSetAtActivation: typeSetAtActivation,
+            pairingCode: pairingCode, serialNumber: serialNumber, typeSetAtActivation: g7TypeSetAtActivation,
             send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
             detailedStatus: { try self.getDetailedStatus().data })
     }
@@ -1167,6 +1161,24 @@ class PodCommsSession: MessageTransportDelegate {
             pairingCode: pairingCode, serialNumber: serialNumber,
             send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
             detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    /// Reads the Pod's CGM interface and G7 record and returns the next Add G7 step. Sends no write.
+    func o5G7AddStep() throws -> O5G7AddStep {
+        try checkO5ExperimentPod()
+        let interface = try O5CgmInterfaceStatus(sendO5AidCommand((data: Data("G4.2".utf8), responsePrefix: "4.2=")))
+        let sensor = try O5G7SensorInfo(sendO5AidCommand((data: Data("G4.1".utf8), responsePrefix: "4.1=")))
+        let progress = try O5G7TypeExperiment.progress(target: podState.earlyControlTarget)
+        return O5G7AddStep.next(
+            pod: .init(control: interface.control, desiredSensorType: interface.desiredSensorType, hasIdentity: sensor.hasIdentity),
+            progress: progress, typeSetAtActivation: g7TypeSetAtActivation, now: Date())
+    }
+
+    /// Whether the early control enable at activation set desired type G7 and read it back.
+    private var g7TypeSetAtActivation: Bool {
+        guard let id = podState.earlyControlEnableID, podState.earlyControlDesiredSensorType == 7 else { return false }
+        return (try? O5EarlyControlEnable.verifiedDesiredSensorType(id: id, target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion)) == 7
     }
 
     private func checkO5ExperimentPod() throws {

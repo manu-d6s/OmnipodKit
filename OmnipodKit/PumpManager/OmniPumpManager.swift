@@ -2214,24 +2214,29 @@ extension OmniPumpManager {
 
     /// Experimental G7 type experiment, step 1. See O5G7TypeExperiment.
     func setO5G7DesiredType() async throws -> String {
-        try await runO5Experiment(withName: "Set O5 G7 Desired Type") { try $0.setO5G7DesiredType() }
+        try await runO5Session(withName: "Set O5 G7 Desired Type") { try $0.setO5G7DesiredType() }
     }
 
     /// Experimental G7 type experiment, step 2. See O5G7TypeExperiment.
     func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) async throws -> String {
-        try await runO5Experiment(withName: "Send O5 G7 Identity Batch") {
+        try await runO5Session(withName: "Send O5 G7 Identity Batch") {
             try $0.sendO5G7IdentityBatchAfterType(pairingCode: pairingCode, serialNumber: serialNumber)
         }
     }
 
     /// Experimental G7 type experiment, step 3. See O5G7TypeExperiment.
     func replaceO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String {
-        try await runO5Experiment(withName: "Replace O5 G7 Identity") {
+        try await runO5Session(withName: "Replace O5 G7 Identity") {
             try $0.replaceO5G7Identity(pairingCode: pairingCode, serialNumber: serialNumber)
         }
     }
 
-    private func runO5Experiment(withName name: String, _ block: @escaping (PodCommsSession) throws -> String) async throws -> String {
+    /// Reads the Pod and returns the next step for giving it a G7. See O5G7AddStep.
+    func o5G7AddStep() async throws -> O5G7AddStep {
+        try await runO5Session(withName: "Read O5 G7 Add Step") { try $0.o5G7AddStep() }
+    }
+
+    private func runO5Session<T>(withName name: String, _ block: @escaping (PodCommsSession) throws -> T) async throws -> T {
         guard self.hasActivePod else {
             throw OmniPumpManagerError.noPodPaired
         }

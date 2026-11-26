@@ -93,7 +93,7 @@ struct OmniPodG7CGMSettingsView: View {
 
     var body: some View {
         List {
-            Section(footer: Text(LocalizedString("Readings come from the Dexcom G7 that the Omnipod 5 Pod reads itself. Start the sensor with the Dexcom app, then give its pairing code and serial number to the Pod.", comment: "Explanation of the Pod-relayed G7 CGM"))) {
+            Section(footer: Text(LocalizedString("Readings come from the Dexcom G7 that the Omnipod 5 Pod reads itself. Start the sensor with the Dexcom app, then give its pairing code and serial number to the Pod with Add G7 Sensor.", comment: "Explanation of the Pod-relayed G7 CGM"))) {
                 row(LocalizedString("Pod", comment: "Label for the linked Pod"),
                     O5PodCGMLink.shared.pump == nil ? LocalizedString("None", comment: "No Pod linked") : LocalizedString("Omnipod 5", comment: "Linked Pod"))
                 row(LocalizedString("Sensor", comment: "Label for the G7 state"), sensorStateText)
@@ -104,6 +104,17 @@ struct OmniPodG7CGMSettingsView: View {
                 if let date = glucose?.lastReadDate {
                     row(LocalizedString("Last read from Pod", comment: "Label for the last Pod read"), date.formatted(date: .omitted, time: .shortened))
                 }
+            }
+            Section {
+                NavigationLink(destination: O5G7AddView(
+                    readStep: { try await Self.pump().o5G7AddStep() },
+                    setType: { try await Self.pump().setO5G7DesiredType() },
+                    add: { code, serial in try await Self.pump().sendO5G7IdentityBatchAfterType(pairingCode: code, serialNumber: serial) },
+                    replace: { code, serial in try await Self.pump().replaceO5G7Identity(pairingCode: code, serialNumber: serial) })) {
+                    Text(hasSensor ? LocalizedString("Replace G7 Sensor", comment: "Link to give the Pod a new G7")
+                                   : LocalizedString("Add G7 Sensor", comment: "Link to give the Pod a G7"))
+                }
+                .disabled(O5PodCGMLink.shared.pump == nil)
             }
             Section {
                 Button(role: .destructive) {
@@ -122,6 +133,15 @@ struct OmniPodG7CGMSettingsView: View {
                 }
             }
         }
+    }
+
+    private var hasSensor: Bool {
+        ![nil, .noSensor].contains(glucose?.latest?.sensorState)
+    }
+
+    private static func pump() throws -> OmniPumpManager {
+        guard let pump = O5PodCGMLink.shared.pump else { throw OmniPumpManagerError.noPodPaired }
+        return pump
     }
 
     private var sensorStateText: String {
@@ -151,7 +171,7 @@ struct OmniPodG7CGMSetupView: View {
 
     var body: some View {
         List {
-            Section(footer: Text(LocalizedString("Start the sensor with the Dexcom app first. Then give its pairing code and serial number to the Pod, which reads the sensor from then on. The Pod must be an Omnipod 5 that was activated with the early control enable.", comment: "Setup explanation for the Pod-relayed G7 CGM"))) {
+            Section(footer: Text(LocalizedString("Start the sensor with the Dexcom app first. Then give its pairing code and serial number to the Pod with Add G7 Sensor in these CGM settings. The Pod reads the sensor from then on. The Pod must be an Omnipod 5 that was activated with the early control enable.", comment: "Setup explanation for the Pod-relayed G7 CGM"))) {
                 Text(LocalizedString("Glucose readings will come from the Dexcom G7 that your Omnipod 5 Pod reads itself, instead of from a direct connection to the sensor.", comment: "Setup summary for the Pod-relayed G7 CGM"))
             }
             Section {
