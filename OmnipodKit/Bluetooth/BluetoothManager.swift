@@ -1169,7 +1169,10 @@ class BluetoothManager: NSObject {
         isAppForeground = false
         guard let peripheral = keepAlivePeripheral else { return }
         if shouldHoldConnection {   // background Pod Keep Alive mode — do NOT disconnect
-            let reason = holdsLinkForCGM ? "CGM nudge hold" : "Pod Keep Alive"
+            let reason = [holdsLinkForCGM ? "CGM nudge hold" : nil,
+                          podKeepAliveKeepsConnectedInBackground ? "Pod Keep Alive" : nil,
+                          shouldUseEagerConnect(for: peripheral) ? "eager connect" : nil]
+                .compactMap { $0 }.joined(separator: ", ")
             log.default("[connectOnDemand] background — %{public}@ holding connection (no disconnect)", reason)
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] background — \(reason) holding connection")
             if peripheral.state == .disconnected {
@@ -1760,6 +1763,18 @@ extension BluetoothManager: CBCentralManagerDelegate {
             log.default("[connectOnDemand] keep-alive — reconnecting after drop")
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] keep-alive — reconnecting after drop")
             connectForCommand(peripheral)
+        } else if holdsLinkForCGM && !isAppForeground && autoConnectIDs.contains(peripheral.identifier.uuidString) {
+            // A deliberate disconnect (a connect timeout, an unresponsive Pod) of the held link: connect
+            // again after a pause that iOS applies while the app is suspended, so it can't loop.
+            resumeScanIfNeeded()
+            commandConnectInFlight = true
+            log.default("[connectOnDemand] CGM nudge hold — reconnecting in 30s after a deliberate disconnect")
+            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] CGM nudge hold — reconnecting in 30s after a deliberate disconnect")
+            let target = manager.retrievePeripherals(withIdentifiers: [peripheral.identifier]).first ?? peripheral
+            if let device = devices.first(where: { $0.manager.peripheral.identifier == peripheral.identifier }) {
+                device.manager.peripheral = target
+            }
+            manager.connect(target, options: [CBConnectPeripheralOptionStartDelayKey: NSNumber(value: 30)])
         } else {
             // Idle: run the fault-listener alarm scan, AND (if a heartbeat is needed) arm the StartDelay
             // probe alongside it. The two coexist — the scan is light and issueDelayedConnectProbe no

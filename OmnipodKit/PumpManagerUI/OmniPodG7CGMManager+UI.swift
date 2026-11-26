@@ -157,6 +157,7 @@ struct OmniPodG7CGMSettingsView: View {
             Section(footer: Text(LocalizedString("Keeps the Pod connected while the phone is locked, so the Pod's notice of each new reading wakes the app at once. Takes effect when the app goes to the background. Experimental: if readings stop arriving while the phone is locked, turn this off.", comment: "Footer for the held Pod connection setting"))) {
                 Toggle(LocalizedString("Experimental: hold Pod connection", comment: "Setting that keeps the Pod connected for its reading notices"),
                        isOn: Binding(get: { holdsLink }, set: { holdsLink = $0; BluetoothManager.holdO5LinkForCGM = $0 }))
+                    .disabled(O5PodCGMLink.shared.pump == nil)
             }
             Section {
                 Button(role: .destructive) {
