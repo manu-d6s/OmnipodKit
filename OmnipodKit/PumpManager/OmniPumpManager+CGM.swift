@@ -47,8 +47,8 @@ extension OmniPumpManager {
                                 device: device(for: state))
     }
 
-    /// Reads G3.12 for the CGM and returns readings newer than `newerThan` not passed on before.
-    func fetchPodGlucose(newerThan: Date?, completion: @escaping (CGMReadingResult) -> Void) {
+    /// Reads G3.12 for the CGM and returns its reading if it was not passed on before.
+    func fetchPodGlucose(completion: @escaping (CGMReadingResult) -> Void) {
         guard state.podType.isO5, hasActivePod, let podState = state.podState, !podState.isFaulted,
               podState.unacknowledgedCommand == nil else {
             completion(.noData)
@@ -60,7 +60,6 @@ extension OmniPumpManager {
                 do {
                     let reply = try session.sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
                     let samples = self.processPodGlucose(reply, receivedAt: self.dateGenerator())
-                        .filter { sample in newerThan.map { sample.date > $0 } ?? true }
                     completion(samples.isEmpty ? .noData : .newData(samples))
                 } catch {
                     completion(.error(error))

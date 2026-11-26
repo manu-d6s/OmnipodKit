@@ -77,12 +77,22 @@ public final class OmniPodG7CGMManager: CGMManager {
             completion(.noData)
             return
         }
-        let newerThan = delegate.call { $0?.startDateToFilterNewData(for: self) }
-        if let newerThan, newerThan.timeIntervalSinceNow > -.minutes(4.5) {
+        // The Pod reads the G7 every 5 minutes; skip the Pod session while its latest reading is recent.
+        // Hosts call this on the delegate queue, so nothing here may wait on that queue.
+        if let latest = pump.lockedPodGlucose.value.latest?.reading?.date, latest.timeIntervalSinceNow > -.minutes(4.5) {
             completion(.noData)
             return
         }
-        pump.fetchPodGlucose(newerThan: newerThan, completion: completion)
+        pump.fetchPodGlucose { result in
+            // New readings go to the delegate, as those from the pump's status reads do;
+            // hosts may ignore the result passed to the completion.
+            if case .newData = result {
+                self.deliver(result)
+                completion(.noData)
+            } else {
+                completion(result)
+            }
+        }
     }
 
     func deliver(_ result: CGMReadingResult) {
