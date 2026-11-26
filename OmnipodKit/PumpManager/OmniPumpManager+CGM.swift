@@ -68,8 +68,8 @@ extension OmniPumpManager {
     /// Reads the Pod's glucose on a Bluetooth wake (a heartbeat, a glucose nudge, a reconnect of the
     /// held link) and passes a new reading to the CGM manager. The wake is the app's only chance to run
     /// while the phone is locked, and a host may do nothing on it, so the read happens here, under a
-    /// background task. A nudge announces a new reading, so it reads even when the last one is recent.
-    func readPodGlucoseOnWake(_ name: String, skippingRecentReading: Bool) {
+    /// background task. A nudge announces a new reading, so it skips only a reading under a minute old.
+    func readPodGlucoseOnWake(_ name: String, skippingReadingsNewerThan age: TimeInterval) {
         guard podServesAsCGM, let cgm = O5PodCGMLink.shared.cgm else { return }
         // The task begins before any hop and ends once, from the read's completion or on expiry.
         // An expiry before the identifier is stored ends the task here and skips the read.
@@ -89,7 +89,7 @@ extension OmniPumpManager {
         // The heartbeat fires on the Bluetooth manager queue, and starting a Pod session can sync
         // onto that queue, so the read starts elsewhere.
         DispatchQueue.global(qos: .userInitiated).async {
-            cgm.readPod(skippingRecentReading: skippingRecentReading) { _ in end() }
+            cgm.readPod(skippingReadingsNewerThan: age) { _ in end() }
         }
     }
 

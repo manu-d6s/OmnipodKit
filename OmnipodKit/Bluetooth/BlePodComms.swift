@@ -74,6 +74,11 @@ class BlePodComms: PodComms {
     }
 
     /// Sets bluetoothManager's podKeepAlive value to drive the pod connection policy.
+    /// Connects the link held for the Pod's glucose nudges, if it should be held and is down.
+    func ensureHeldLink() {
+        bluetoothManager?.ensureHeldLink()
+    }
+
     func setPodKeepAliveKeepsConnectedInBackground(_ keepConnectedInBackground: Bool) {
         print("@@@ setting bluetoothManager.podKeepAliveKeepsConnectedInBackground to \(keepConnectedInBackground)")
         bluetoothManager.podKeepAliveKeepsConnectedInBackground = keepConnectedInBackground

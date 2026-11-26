@@ -401,18 +401,25 @@ public class OmniPumpManager: RileyLinkPumpManager {
     func omnipodHeartbeatDidFire() {
         // A pump-provided heartbeat wake (delayed-connect probe) completed — run a Loop cycle. Loop's
         // resulting status/dose commands connect on demand (which preempts the re-armed probe).
-        readPodGlucoseOnWake("heartbeat", skippingRecentReading: true)
+        readPodGlucoseOnWake("heartbeat", skippingReadingsNewerThan: .minutes(4.5))
         issueHeartbeatIfNeeded()
     }
 
     func omnipodDidReceiveGlucoseNudge() {
         let sinceReading = lockedPodGlucose.value.latest?.reading.map { String(format: "%.0fs", -$0.date.timeIntervalSinceNow) } ?? "?"
         logDeviceCommunication("[cgmNudge] glucose nudge, last reading \(sinceReading) ago", type: .connection)
-        readPodGlucoseOnWake("nudge", skippingRecentReading: false)
+        readPodGlucoseOnWake("nudge", skippingReadingsNewerThan: .minutes(1))
+        issueHeartbeatIfNeeded()
     }
 
     func omnipodHeldLinkDidConnect() {
-        readPodGlucoseOnWake("reconnect", skippingRecentReading: true)
+        readPodGlucoseOnWake("reconnect", skippingReadingsNewerThan: .minutes(4.5))
+        issueHeartbeatIfNeeded()
+    }
+
+    /// Connects the link held for the Pod's glucose nudges, once the CGM manager is linked.
+    func cgmLinkDidChange() {
+        (podComms as? BlePodComms)?.ensureHeldLink()
     }
 
     func omnipodDidDetectAlert(slots: AlertSet) {

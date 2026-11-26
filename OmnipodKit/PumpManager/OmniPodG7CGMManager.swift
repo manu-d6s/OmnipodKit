@@ -48,6 +48,7 @@ public final class OmniPodG7CGMManager: CGMManager {
         set {
             delegate.delegate = newValue
             O5PodCGMLink.shared.cgm = self
+            O5PodCGMLink.shared.pump?.cgmLinkDidChange()
         }
     }
 
@@ -92,19 +93,18 @@ public final class OmniPodG7CGMManager: CGMManager {
     }
 
     public func fetchNewDataIfNeeded(_ completion: @escaping (CGMReadingResult) -> Void) {
-        readPod(skippingRecentReading: true, completion)
+        readPod(skippingReadingsNewerThan: .minutes(4.5), completion)
     }
 
     /// Reads the Pod's glucose and passes a new reading to the delegate. The Pod reads the G7 every
-    /// 5 minutes, so `skippingRecentReading` skips the Pod session while its latest reading is recent.
+    /// 5 minutes, so the Pod session is skipped while its latest reading is newer than `age`.
     /// Hosts call this on the delegate queue, so nothing here may wait on that queue.
-    func readPod(skippingRecentReading: Bool, _ completion: @escaping (CGMReadingResult) -> Void) {
+    func readPod(skippingReadingsNewerThan age: TimeInterval, _ completion: @escaping (CGMReadingResult) -> Void) {
         guard let pump = O5PodCGMLink.shared.pump else {
             completion(.noData)
             return
         }
-        if skippingRecentReading, let latest = pump.lockedPodGlucose.value.latest?.reading?.date,
-           latest.timeIntervalSinceNow > -.minutes(4.5) {
+        if let latest = pump.lockedPodGlucose.value.latest?.reading?.date, latest.timeIntervalSinceNow > -age {
             completion(.noData)
             return
         }
