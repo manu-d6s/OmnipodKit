@@ -65,10 +65,11 @@ extension OmniPumpManager {
                                 device: device(for: state))
     }
 
-    /// Reads the Pod's glucose on a heartbeat wake and passes a new reading to the CGM manager.
-    /// The wake is the app's only chance to run while the phone is locked, and a host may do
-    /// nothing on the heartbeat itself, so the read happens here, under a background task.
-    func readPodGlucoseOnHeartbeat() {
+    /// Reads the Pod's glucose on a Bluetooth wake (a heartbeat or a glucose nudge) and passes a new
+    /// reading to the CGM manager. The wake is the app's only chance to run while the phone is locked,
+    /// and a host may do nothing on it, so the read happens here, under a background task. The read is
+    /// skipped while the latest reading is newer than `age`.
+    func readPodGlucoseOnWake(_ name: String, skippingReadingsNewerThan age: TimeInterval) {
         guard podServesAsCGM, let cgm = O5PodCGMLink.shared.cgm else { return }
         // The task begins before any hop and ends once, from the read's completion or on expiry.
         // An expiry before the identifier is stored ends the task here and skips the read.
@@ -78,7 +79,7 @@ extension OmniPumpManager {
             task.mutate { id = $0.id; $0 = (.invalid, true) }
             if id != .invalid { UIApplication.shared.endBackgroundTask(id) }
         }
-        let id = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on heartbeat", expirationHandler: end)
+        let id = UIApplication.shared.beginBackgroundTask(withName: "Read Pod glucose on \(name)", expirationHandler: end)
         var alreadyFinished = false
         task.mutate { if $0.finished { alreadyFinished = true } else { $0.id = id } }
         if alreadyFinished {
@@ -88,7 +89,7 @@ extension OmniPumpManager {
         // The heartbeat fires on the Bluetooth manager queue, and starting a Pod session can sync
         // onto that queue, so the read starts elsewhere.
         DispatchQueue.global(qos: .userInitiated).async {
-            cgm.fetchNewDataIfNeeded { _ in end() }
+            cgm.readPod(skippingReadingsNewerThan: age) { _ in end() }
         }
     }
 
