@@ -514,8 +514,14 @@ class BluetoothManager: NSObject {
     /// When the held link last connected, to log how long the Pod keeps it. managerQueue-isolated.
     private var heldLinkConnectedAt: Date?
 
-    /// True while a connect issued by `connectHeldLink` is pending. managerQueue-isolated.
+    /// True while a connect issued by `connectHeldLink` is pending, and whether it waits for a start
+    /// delay. managerQueue-isolated.
     private var heldLinkConnectPending = false
+    private var heldLinkConnectDelayed = false
+
+    /// When a delayed held connect was cancelled for a command, whose own connect replaces it; the
+    /// disconnect that the cancel may report is then not a drop. managerQueue-isolated.
+    private var heldConnectCancelledForCommandAt: Date?
 
     /// A held link that drops sooner than this after connecting is reconnected after the same delay,
     /// as is a failed connect, so a deliberate cancel or a failing Pod can't make a connect loop.
@@ -526,28 +532,58 @@ class BluetoothManager: NSObject {
         holdsLinkForCGM && autoConnectIDs.contains(peripheral.identifier.uuidString) && !shouldUseEagerConnect(for: peripheral)
     }
 
-    /// Connects the held link: a plain connect, or one that iOS starts after `delay` seconds, which
-    /// it does while the app is suspended.
+    /// Connects the held link: a plain connect, or one that starts after `delay` seconds. In the
+    /// background iOS applies the delay, also while the app is suspended. In the foreground iOS
+    /// ignores it, so the connect is issued after the delay instead.
     private func connectHeldLink(_ peripheral: CBPeripheral, after delay: Int, reason: String) {
         dispatchPrecondition(condition: .onQueue(managerQueue))
         commandConnectInFlight = true
         heldLinkConnectPending = true
-        log.default("[cgmHold] connect (%{public}@, StartDelay %{public}ds)", reason, delay)
-        connectionDelegate?.omnipodLogDeviceEvent("[cgmHold] connect (\(reason), StartDelay \(delay)s)")
+        heldLinkConnectDelayed = delay > 0
+        log.default("[cgmHold] connect (%{public}@, delay %{public}ds)", reason, delay)
+        connectionDelegate?.omnipodLogDeviceEvent("[cgmHold] connect (\(reason), delay \(delay)s)")
         let target = manager.retrievePeripherals(withIdentifiers: [peripheral.identifier]).first ?? peripheral
         if let device = devices.first(where: { $0.manager.peripheral.identifier == peripheral.identifier }) {
             device.manager.peripheral = target
         }
+        if delay > 0 && isAppForeground {
+            managerQueue.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
+                guard let self = self, self.heldLinkConnectPending, self.isHeldForCGM(target),
+                      target.state == .disconnected else { return }
+                self.heldLinkConnectDelayed = false
+                self.manager.connect(target, options: nil)
+            }
+            return
+        }
         manager.connect(target, options: delay > 0 ? [CBConnectPeripheralOptionStartDelayKey: NSNumber(value: delay)] : nil)
     }
 
-    /// Connects the held link if it should be held and is down, for example after the CGM manager
-    /// was linked in a background launch.
-    func ensureHeldLink() {
+    /// Brings the held link in line with the setting and the CGM link: connects it when it should be
+    /// held and is down, for example after the CGM manager was linked in a background launch, and
+    /// hands the Pod back to the usual policy (idle disconnect and the heartbeat probe) when it no
+    /// longer should be held.
+    func updateHeldLink() {
         managerQueue.async {
-            guard let peripheral = self.keepAlivePeripheral, self.isHeldForCGM(peripheral),
-                  peripheral.state == .disconnected, !self.heldLinkConnectPending else { return }
-            self.connectHeldLink(peripheral, after: 0, reason: "link down")
+            guard let peripheral = self.keepAlivePeripheral else { return }
+            if self.isHeldForCGM(peripheral) {
+                if peripheral.state == .disconnected, !self.heldLinkConnectPending {
+                    self.connectHeldLink(peripheral, after: 0, reason: "link down")
+                }
+                return
+            }
+            guard self.heldLinkConnectPending || self.heldLinkConnectedAt != nil else { return }
+            self.heldLinkConnectPending = false
+            self.heldLinkConnectDelayed = false
+            self.heldLinkConnectedAt = nil
+            self.connectionDelegate?.omnipodLogDeviceEvent("[cgmHold] released")
+            guard !self.shouldHoldConnection, !self.hasActiveCommandSession else { return }
+            self.commandConnectInFlight = false
+            if peripheral.state != .disconnected {
+                self.manager.cancelPeripheralConnection(peripheral)   // didDisconnect arms the probe
+            } else {
+                self.resumeScanIfNeeded()
+                self.issueDelayedConnectProbe(peripheral)
+            }
         }
     }
 
@@ -1124,6 +1160,15 @@ class BluetoothManager: NSObject {
             delayedProbeInFlight = false
             delayedProbeIssuedAt = nil
             manager.cancelPeripheralConnection(peripheral)
+        }
+        if heldLinkConnectPending && heldLinkConnectDelayed {
+            // A command doesn't wait for a delayed held connect; its own connect replaces it.
+            connectionDelegate?.omnipodLogDeviceEvent("[cgmHold] command replaces the delayed connect")
+            heldLinkConnectDelayed = false
+            if peripheral.state == .connecting {
+                heldConnectCancelledForCommandAt = Date()
+                manager.cancelPeripheralConnection(peripheral)
+            }
         }
         commandConnectInFlight = true
         // Eager connect (InPlay / iPhone-16 mitigation): a known pod on an affected phone connects
@@ -1705,6 +1750,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
 
         let heldConnect = heldLinkConnectPending
         heldLinkConnectPending = false
+        heldLinkConnectDelayed = false
         if holdsLinkForCGM && autoConnectIDs.contains(peripheral.identifier.uuidString) {
             heldLinkConnectedAt = Date()
             connectionDelegate?.omnipodLogDeviceEvent("[cgmHold] link connected (foreground \(isAppForeground), held connect \(heldConnect))")
@@ -1780,17 +1826,28 @@ extension BluetoothManager: CBCentralManagerDelegate {
             return
         }
 
+        if let cancelledAt = heldConnectCancelledForCommandAt {
+            heldConnectCancelledForCommandAt = nil
+            if Date().timeIntervalSince(cancelledAt) < 5, peripheral.state != .connected {
+                // The cancel of a delayed held connect for a command; the command's connect is pending.
+                delayedProbeInFlight = false
+                return
+            }
+        }
+
         if holdsLinkForCGM && autoConnectIDs.contains(peripheral.identifier.uuidString) {
             let upFor = heldLinkConnectedAt.map { Date().timeIntervalSince($0) }
             heldLinkConnectedAt = nil
             heldLinkConnectPending = false
+            heldLinkConnectDelayed = false
             let upForText = upFor.map { String(format: "%.0fs", $0) } ?? "?"
             log.default("[cgmHold] link dropped after %{public}@", upForText)
             connectionDelegate?.omnipodLogDeviceEvent("[cgmHold] link dropped after \(upForText) (foreground \(isAppForeground), error=\(error.map { String(describing: $0) } ?? "nil"))")
             if isHeldForCGM(peripheral) {
                 delayedProbeInFlight = false
-                let quickDrop = (upFor ?? 0) < TimeInterval(BluetoothManager.heldLinkRetryDelaySeconds)
+                let quickDrop = upFor.map { $0 < TimeInterval(BluetoothManager.heldLinkRetryDelaySeconds) } ?? false
                 connectHeldLink(peripheral, after: quickDrop ? BluetoothManager.heldLinkRetryDelaySeconds : 0, reason: "drop")
+                resumeScanIfNeeded()   // fault-listener alarm scan while the link is down
                 if pendingHeartbeatFire {
                     pendingHeartbeatFire = false
                     connectionDelegate?.omnipodHeartbeatDidFire()
@@ -1884,6 +1941,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             heldLinkConnectPending = false
             delayedProbeInFlight = false
             connectHeldLink(peripheral, after: BluetoothManager.heldLinkRetryDelaySeconds, reason: "connect failed")
+            resumeScanIfNeeded()   // fault-listener alarm scan while the link is down
             return
         }
 

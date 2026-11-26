@@ -23,6 +23,11 @@ public final class OmniPodG7CGMManager: CGMManager {
         O5PodCGMLink.shared.cgm = self
     }
 
+    deinit {
+        // The link's weak reference is already nil here, so the pump sees the CGM gone.
+        O5PodCGMLink.shared.pump?.cgmLinkDidChange()
+    }
+
     public convenience init?(rawState: RawStateValue) {
         self.init()
     }

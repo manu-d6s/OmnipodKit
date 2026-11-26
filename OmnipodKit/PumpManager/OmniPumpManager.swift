@@ -417,9 +417,10 @@ public class OmniPumpManager: RileyLinkPumpManager {
         issueHeartbeatIfNeeded()
     }
 
-    /// Connects the link held for the Pod's glucose nudges, once the CGM manager is linked.
+    /// Connects or releases the link held for the Pod's glucose nudges, after the CGM manager's link
+    /// or the hold setting changed.
     func cgmLinkDidChange() {
-        (podComms as? BlePodComms)?.ensureHeldLink()
+        (podComms as? BlePodComms)?.updateHeldLink()
     }
 
     func omnipodDidDetectAlert(slots: AlertSet) {
