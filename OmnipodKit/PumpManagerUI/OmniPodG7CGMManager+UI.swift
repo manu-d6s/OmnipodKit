@@ -114,6 +114,7 @@ struct OmniPodG7CGMSettingsView: View {
 
     @Environment(\.dismissAction) private var dismiss
     @State private var showingDeleteConfirmation = false
+    @State private var holdsLink = BluetoothManager.holdO5LinkForCGM
 
     private var glucose: O5PodGlucoseState? { O5PodCGMLink.shared.pump?.lockedPodGlucose.value }
 
@@ -152,6 +153,10 @@ struct OmniPodG7CGMSettingsView: View {
                                    : LocalizedString("Add G7 Sensor", comment: "Link to give the Pod a G7"))
                 }
                 .disabled(O5PodCGMLink.shared.pump == nil)
+            }
+            Section(footer: Text(LocalizedString("Keeps the Pod connected while the phone is locked, so the Pod's notice of each new reading wakes the app at once. Experimental: if readings stop arriving while the phone is locked, turn this off.", comment: "Footer for the held Pod connection setting"))) {
+                Toggle(LocalizedString("Experimental: hold Pod connection", comment: "Setting that keeps the Pod connected for its reading notices"),
+                       isOn: Binding(get: { holdsLink }, set: { holdsLink = $0; BluetoothManager.holdO5LinkForCGM = $0 }))
             }
             Section {
                 Button(role: .destructive) {
