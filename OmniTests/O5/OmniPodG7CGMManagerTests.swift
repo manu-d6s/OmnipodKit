@@ -5,6 +5,7 @@
 
 import XCTest
 import LoopKit
+import RileyLinkBLEKit
 @testable import OmnipodKit
 
 final class OmniPodG7CGMManagerTests: XCTestCase {
@@ -45,18 +46,38 @@ final class OmniPodG7CGMManagerTests: XCTestCase {
         func recordRetractedAlert(_ alert: Alert, at date: Date) {}
     }
 
-    private func makePump() throws -> OmniPumpManager {
+    /// Stands in for the RileyLink Bluetooth provider, which needs a Bluetooth background mode.
+    private final class DeviceProvider: RileyLinkDeviceProvider {
+        weak var delegate: RileyLinkDeviceProviderDelegate?
+        var idleListeningState: RileyLinkBluetoothDevice.IdleListeningState = .disabled
+        var idleListeningEnabled: Bool { false }
+        var timerTickEnabled = false
+        var connectingCount: Int { 0 }
+        func deprioritize(_ device: RileyLinkDevice, completion: (() -> Void)?) { completion?() }
+        func assertIdleListening(forcingRestart: Bool) {}
+        func getDevices(_ completion: @escaping ([RileyLinkDevice]) -> Void) { completion([]) }
+        func connect(_ device: RileyLinkDevice) {}
+        func disconnect(_ device: RileyLinkDevice) {}
+        func setScanningEnabled(_ enabled: Bool) {}
+        func shouldConnect(to deviceID: String) -> Bool { false }
+        var debugDescription: String { "DeviceProvider" }
+    }
+
+    /// A pump manager without a Pod. Eros, because the BLE Pod types create a Bluetooth central
+    /// with state restoration, which the test host doesn't allow. The CGM manager reads its glucose
+    /// state and asks it to read the Pod, which it declines without an O5 Pod.
+    private func makePump() -> OmniPumpManager {
         let state = OmniPumpManagerState(isOnboarded: true, podState: nil, timeZone: .current,
-            basalSchedule: BasalSchedule(entries: [BasalScheduleEntry(rate: 1, startTime: 0, podType: omnipod5Type)]),
+            basalSchedule: BasalSchedule(entries: [BasalScheduleEntry(rate: 1, startTime: 0, podType: erosType)]),
             maxBasalRateUnitsPerHour: 10, maxBolusUnits: 10, insulinType: .novolog,
-            podType: omnipod5Type, podKeepAlive: .disabled, controllerId: 1, podId: 2)
-        return try XCTUnwrap(OmniPumpManager(rawState: state.rawValue))
+            podType: erosType, podKeepAlive: .disabled, controllerId: 1, podId: 2)
+        return OmniPumpManager(state: state, rileyLinkDeviceProvider: DeviceProvider())
     }
 
     /// Hosts such as Trio call fetchNewDataIfNeeded on the delegate queue. The manager must
     /// not wait on that queue, which would trap in libdispatch.
     func testFetchOnTheDelegateQueueWithAPumpLinked() throws {
-        let pump = try makePump()
+        let pump = makePump()
         XCTAssertTrue(O5PodCGMLink.shared.pump === pump)
         let queue = DispatchQueue(label: "OmniPodG7CGMManagerTests.delegateQueue")
         let delegate = Delegate(queue: queue)
