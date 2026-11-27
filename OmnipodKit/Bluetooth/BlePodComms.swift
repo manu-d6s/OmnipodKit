@@ -760,6 +760,10 @@ extension BlePodComms: OmniConnectionDelegate {
         delegate?.omnipodDidDetectAlert(slots: slots)
     }
 
+    func omnipodDidReceiveGlucoseNudge() {
+        delegate?.omnipodDidReceiveGlucoseNudge()
+    }
+
     /// Lift the fault-listener re-wake suppression once all pod alerts have cleared (OmniPumpManager
     /// calls this from a connected status read).
     func resumeAlarmScanAfterAlertsCleared() {

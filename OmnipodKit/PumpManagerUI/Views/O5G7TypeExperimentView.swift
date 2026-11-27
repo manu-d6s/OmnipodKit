@@ -23,8 +23,7 @@ struct O5G7TypeExperimentView: View {
     @State private var replaceResult = ""
 
     private var inputIsValid: Bool {
-        pairingCode.count == 4 && serialNumber.count == 12
-            && (pairingCode + serialNumber).allSatisfy { $0.isASCII && $0.isNumber }
+        O5G7IdentityFields.isValid(pairingCode: pairingCode, serialNumber: serialNumber)
     }
 
     var body: some View {
@@ -38,10 +37,7 @@ struct O5G7TypeExperimentView: View {
                 }
             }
             Section(header: Text("Step 2"), footer: Text("Only after step 1 was verified, or when desired type G7 was set during activation (then skip step 1). Sends the same batch as the add-G7 attempt, enable plus identity, once. Wait a few minutes after step 1 and read the status first.")) {
-                TextField("Pairing code (4 digits)", text: $pairingCode)
-                    .keyboardType(.numberPad)
-                TextField("Serial number (12 digits)", text: $serialNumber)
-                    .keyboardType(.numberPad)
+                O5G7IdentityFields(pairingCode: $pairingCode, serialNumber: $serialNumber)
                 button(running == .batch ? "Sending…" : "Send Identity Batch",
                        disabled: !inputIsValid || running != nil || !batchResult.isEmpty) {
                     confirming = .batch

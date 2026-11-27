@@ -18,17 +18,13 @@ struct O5G7IdentityView: View {
     @State private var result = ""
 
     private var inputIsValid: Bool {
-        pairingCode.count == 4 && serialNumber.count == 12
-            && (pairingCode + serialNumber).allSatisfy { $0.isASCII && $0.isNumber }
+        O5G7IdentityFields.isValid(pairingCode: pairingCode, serialNumber: serialNumber)
     }
 
     var body: some View {
         List {
             Section(footer: Text("Sends the sensor identity to the Pod once, the way the Omnipod 5 app adds a G7 to an active Pod. Only for a Pod whose control was enabled during activation. Once the identity has been sent it can't be sent again for this Pod, and the Pod may fault.")) {
-                TextField("Pairing code (4 digits)", text: $pairingCode)
-                    .keyboardType(.numberPad)
-                TextField("Serial number (12 digits)", text: $serialNumber)
-                    .keyboardType(.numberPad)
+                O5G7IdentityFields(pairingCode: $pairingCode, serialNumber: $serialNumber)
             }
             Section {
                 Button(action: { confirming = true }) {
