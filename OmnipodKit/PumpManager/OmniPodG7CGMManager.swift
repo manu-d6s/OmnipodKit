@@ -11,7 +11,7 @@ import LoopKit
 /// reads itself. It holds no device state of its own: readings, sensor state and Pod
 /// communication all come from the app's OmniPumpManager.
 public final class OmniPodG7CGMManager: CGMManager {
-    public static let pluginIdentifier = "OmnipodG7"
+    public let pluginIdentifier = "OmnipodG7"
 
     public var localizedTitle: String {
         LocalizedString("Dexcom G7 via Omnipod 5", comment: "Title of the CGM that takes G7 readings from the Omnipod 5 Pod")
