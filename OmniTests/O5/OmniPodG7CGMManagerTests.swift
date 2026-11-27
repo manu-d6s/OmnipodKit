@@ -12,38 +12,31 @@ final class OmniPodG7CGMManagerTests: XCTestCase {
     /// A host delegate that, like Trio's, requires its calls on its own queue.
     private final class Delegate: CGMManagerDelegate {
         let queue: DispatchQueue
-        var readingResults: [CGMReadingResult] = []
+        nonisolated(unsafe) var readingResults: [CGMReadingResult] = []
 
-        init(queue: DispatchQueue) { self.queue = queue }
+        nonisolated init(queue: DispatchQueue) { self.queue = queue }
 
-        func startDateToFilterNewData(for manager: CGMManager) -> Date? {
+        nonisolated func startDateToFilterNewData(for manager: CGMManager) -> Date? {
             dispatchPrecondition(condition: .onQueue(queue))
             return nil
         }
-        func cgmManager(_ manager: CGMManager, hasNew readingResult: CGMReadingResult) {
+        nonisolated func cgmManager(_ manager: CGMManager, hasNew readingResult: CGMReadingResult) {
             dispatchPrecondition(condition: .onQueue(queue))
             readingResults.append(readingResult)
         }
-        func cgmManager(_ manager: CGMManager, hasNew events: [PersistedCgmEvent]) {}
-        func cgmManagerWantsDeletion(_ manager: CGMManager) {}
-        func cgmManagerDidUpdateState(_ manager: CGMManager) {}
-        func credentialStoragePrefix(for manager: CGMManager) -> String { "test" }
-        func cgmManager(_ manager: CGMManager, didUpdate status: CGMManagerStatus) {}
-        func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?,
-                           type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {}
-        func issueAlert(_ alert: Alert) {}
-        func retractAlert(identifier: Alert.Identifier) {}
-        func doesIssuedAlertExist(identifier: Alert.Identifier, completion: @escaping (Result<Bool, Error>) -> Void) {
-            completion(.success(false))
-        }
-        func lookupAllUnretracted(managerIdentifier: String, completion: @escaping (Result<[PersistedAlert], Error>) -> Void) {
-            completion(.success([]))
-        }
-        func lookupAllUnacknowledgedUnretracted(managerIdentifier: String,
-                                                completion: @escaping (Result<[PersistedAlert], Error>) -> Void) {
-            completion(.success([]))
-        }
-        func recordRetractedAlert(_ alert: Alert, at date: Date) {}
+        nonisolated func cgmManager(_ manager: CGMManager, hasNew events: [PersistedCgmEvent]) {}
+        func cgmManagerWantsDeletion(_ manager: CGMManager) async {}
+        nonisolated func cgmManagerDidUpdateState(_ manager: CGMManager) {}
+        nonisolated func credentialStoragePrefix(for manager: CGMManager) -> String { "test" }
+        nonisolated func cgmManager(_ manager: CGMManager, didUpdate status: CGMManagerStatus) {}
+        nonisolated func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?,
+                                       type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {}
+        func issueAlert(_ alert: Alert) async {}
+        func retractAlert(identifier: Alert.Identifier) async {}
+        nonisolated func doesIssuedAlertExist(identifier: Alert.Identifier) async throws -> Bool { false }
+        nonisolated func lookupAllUnretracted(managerIdentifier: String) async throws -> [PersistedAlert] { [] }
+        nonisolated func lookupAllUnacknowledgedUnretracted(managerIdentifier: String) async throws -> [PersistedAlert] { [] }
+        nonisolated func recordRetractedAlert(_ alert: Alert, at date: Date) async throws {}
     }
 
     /// Stands in for the RileyLink Bluetooth provider, which needs a Bluetooth background mode.
