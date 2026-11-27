@@ -40,6 +40,13 @@ class PeripheralManager: NSObject {
 
     var idleStart: Date? = nil
 
+    /// When the current link came up; nil while disconnected.
+    private var connectedAt: Date?
+    private let connectedAtLock = NSLock()
+
+    /// Setup steps of the connection being configured, with the time each took. Used on `queue`.
+    private var setupSteps: [String] = []
+
     var needsReconnection: Bool {
         guard let start = idleStart else { return false }
 
@@ -159,6 +166,8 @@ extension PeripheralManager {
                 }
 
                 if self.needsConfiguration || self.peripheral.services == nil {
+                    let setupStart = Date()
+                    self.setupSteps = []
                     do {
                         self.log.bleDebug("Applying configuration")
                         try self.applyConfiguration()
@@ -170,8 +179,10 @@ extension PeripheralManager {
                         }
 
                         self.log.bleDebug("Peripheral configuration completed")
+                        self.logConnectionTiming("[connect] setup took \(Self.seconds(since: setupStart)), done \(self.sinceLinkUp): \(self.setupSteps.joined(separator: ", "))")
                     } catch let error {
                         self.log.error("Error applying peripheral configuration: %{public}@", String(describing: error))
+                        self.logConnectionTiming("[connect] setup failed after \(Self.seconds(since: setupStart)), \(self.sinceLinkUp): \(self.setupSteps.joined(separator: ", "))")
                         // Will retry
                     }
                 }
@@ -203,7 +214,9 @@ extension PeripheralManager {
     }
 
     private func applyConfiguration(discoveryTimeout: TimeInterval = 2) throws {
-        try discoverServices(configuration.serviceCharacteristics.keys.map { $0 }, timeout: discoveryTimeout)
+        try setupStep("services") {
+            try discoverServices(configuration.serviceCharacteristics.keys.map { $0 }, timeout: discoveryTimeout)
+        }
 
         for service in peripheral.services ?? [] {
             log.default("Discovered service: %{public}@", service)
@@ -211,7 +224,9 @@ extension PeripheralManager {
                 // Not all services may have characteristics
                 continue
             }
-            try discoverCharacteristics(characteristics, for: service, timeout: discoveryTimeout)
+            try setupStep("characteristics") {
+                try discoverCharacteristics(characteristics, for: service, timeout: discoveryTimeout)
+            }
         }
 
         for (serviceUUID, characteristicUUIDs) in configuration.notifyingCharacteristics {
@@ -231,9 +246,58 @@ extension PeripheralManager {
                     continue
                 }
 
-                try setNotifyValue(true, for: characteristic, timeout: discoveryTimeout)
+                try setupStep("notify") {
+                    try setNotifyValue(true, for: characteristic, timeout: discoveryTimeout)
+                }
             }
         }
+    }
+}
+
+
+// MARK: - Connection timing
+extension PeripheralManager {
+    /// Runs one step of connection setup and records how long it took.
+    func setupStep<T>(_ name: String, _ body: () throws -> T) throws -> T {
+        dispatchPrecondition(condition: .onQueue(queue))
+        let start = Date()
+        do {
+            let result = try body()
+            setupSteps.append("\(name) \(Self.seconds(since: start))")
+            return result
+        } catch {
+            setupSteps.append("\(name) failed after \(Self.seconds(since: start))")
+            throw error
+        }
+    }
+
+    /// Records a setup step that has no duration of its own.
+    func noteSetupStep(_ step: String) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        setupSteps.append(step)
+    }
+
+    static func seconds(since date: Date) -> String {
+        String(format: "%.3fs", Date().timeIntervalSince(date))
+    }
+
+    /// Time since the current link came up, for log lines.
+    var sinceLinkUp: String {
+        connectedAtLock.lock()
+        defer { connectedAtLock.unlock() }
+        guard let connectedAt else { return "no link" }
+        return "\(Self.seconds(since: connectedAt)) after link-up"
+    }
+
+    private func setConnectedAt(_ date: Date?) {
+        connectedAtLock.lock()
+        connectedAt = date
+        connectedAtLock.unlock()
+    }
+
+    private func logConnectionTiming(_ message: String) {
+        log.default("%{public}@", message)
+        bluetoothManager?.connectionDelegate?.omnipodLogDeviceEvent(message)
     }
 }
 
@@ -579,6 +643,7 @@ extension PeripheralManager {
     func centralManager(_ central: CBCentralManager, didDisconnect peripheral: CBPeripheral, error: Error?) {
         log.error("[DISCONNECT] PeripheralManager didDisconnect: error=%{public}@ peripheral=%{public}@",
                   String(describing: error), peripheral)
+        setConnectedAt(nil)
         self.queue.async {
             self.idleStart = nil
         }
@@ -588,6 +653,7 @@ extension PeripheralManager {
         self.log.debug("PeripheralManager - didConnect: %@", peripheral)
         switch peripheral.state {
         case .connected:
+            setConnectedAt(Date())
             clearCommsQueues()
 
             /// maximumWriteValueLength (MTU minus 3-byte overhead) is the max bytes to write in a single operation.
@@ -662,6 +728,7 @@ extension PeripheralManager {
                 manager.log.default("======================== %{public}@ ===========================", name)
                 block()
                 manager.log.default("------------------------ %{public}@ ---------------------------", name)
+                manager.log.default("[session] %{public}@ ended %{public}@", name, manager.sinceLinkUp)
                 self?.idleStart = Date()
                 self?.log.default("Start of idle at %{public}@", String(describing: self?.idleStart))
                 self?.scheduleIdleDisconnectIfNeeded()

@@ -16,6 +16,10 @@ fileprivate var skipO5AID9 = true // skips the 9th & slightly problematic O5 AID
 
 class BlePodComms: PodComms {
 
+    /// How long the O5 login waits for the link's write size to reach a full packet, and how often it looks.
+    static let writeSizeWaitLimit: TimeInterval = 2
+    static let writeSizePollInterval: TimeInterval = 0.02
+
     var manager: PeripheralManager? {
         didSet {
             manager?.delegate = self
@@ -815,15 +819,17 @@ extension BlePodComms: PeripheralManagerDelegate {
             /// For O5 using .withoutResponse, writes exceeding this value will be silently truncated.
             if manager.podType.isO5 {
                 let requiredMaxPayload = manager.profile.packetLayout.maxPayloadSize
+                let waitStart = Date()
                 var attempts = 0
                 var maxWriteValue = manager.peripheral.maximumWriteValueLength(for: .withoutResponse)
-                while maxWriteValue < requiredMaxPayload && attempts < 10 {
-                    log.bleDebug("maximumWriteValueLength not yet settled (%{public}d < %{public}d), waiting... (attempt %{public}d/10)", maxWriteValue, requiredMaxPayload, attempts + 1)
-                    Thread.sleep(forTimeInterval: 0.2)
+                // Short polls, so the login starts as soon as the size has settled; 2 s in all at most
+                while maxWriteValue < requiredMaxPayload && Date().timeIntervalSince(waitStart) < BlePodComms.writeSizeWaitLimit {
+                    Thread.sleep(forTimeInterval: BlePodComms.writeSizePollInterval)
                     maxWriteValue = manager.peripheral.maximumWriteValueLength(for: .withoutResponse)
                     attempts += 1
                 }
                 log.bleDebug("maximumWriteValueLength settled after %{public}d polls: maximumWriteValueLength=%{public}d (required=%{public}d)", attempts, maxWriteValue, requiredMaxPayload)
+                manager.noteSetupStep("write size \(maxWriteValue) after \(attempts) polls \(PeripheralManager.seconds(since: waitStart))")
                 if maxWriteValue < requiredMaxPayload {
                     log.error("WARNING: maximumWriteValueLength (%{public}d) below required minimum (%{public}d). Large writes may be truncated!", maxWriteValue, requiredMaxPayload)
                 }
@@ -835,9 +841,10 @@ extension BlePodComms: PeripheralManagerDelegate {
             }
 
             do {
-                try manager.sendHello(myId: myId)
-                try manager.enableNotifications() // Seemingly this cannot be done before the hello command, or the pod disconnects
-                try establishNewSession()
+                try manager.setupStep("hello") { try manager.sendHello(myId: myId) }
+                // Seemingly this cannot be done before the hello command, or the pod disconnects
+                try manager.setupStep("notifications") { try manager.enableNotifications() }
+                try manager.setupStep("login") { try establishNewSession() }
                 needsSessionEstablishment = false
                 delegate?.podCommsDidEstablishSession(self)
             } catch {
@@ -846,6 +853,7 @@ extension BlePodComms: PeripheralManagerDelegate {
 
         } else {
             log.default("Session already established.")
+            manager.noteSetupStep(hasLTK ? "login already done" : "not paired")
         }
     }
 }
