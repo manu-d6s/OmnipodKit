@@ -49,10 +49,13 @@ extension OmniPodG7CGMManager: CGMManagerUI {
             onCancel: { [weak nav] in nav?.notifyComplete() },
             onContinue: { [weak nav] in
                 guard let nav else { return }
-                let manager = OmniPodG7CGMManager()
-                nav.cgmManagerOnboardingDelegate?.cgmManagerOnboarding(didCreateCGMManager: manager)
-                nav.cgmManagerOnboardingDelegate?.cgmManagerOnboarding(didOnboardCGMManager: manager)
-                nav.notifyComplete()
+                // A button action, so this runs on the main thread.
+                MainActor.assumeIsolated {
+                    let manager = OmniPodG7CGMManager()
+                    nav.cgmManagerOnboardingDelegate?.cgmManagerOnboarding(didCreateCGMManager: manager)
+                    nav.cgmManagerOnboardingDelegate?.cgmManagerOnboarding(didOnboardCGMManager: manager)
+                    nav.notifyComplete()
+                }
             }
         )
         let hostingController = DismissibleHostingController(content: view, isModalInPresentation: true, colorPalette: colorPalette)
