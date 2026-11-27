@@ -1757,16 +1757,25 @@ extension BluetoothManager: CBCentralManagerDelegate {
             return
         }
 
-        if shouldHoldConnection && commandConnectInFlight {
+        // A held CGM link that times out or that the Pod disconnects was lost, not cancelled by the app
+        // (a cancel has no error), also when iOS restored it at launch and no command connect set
+        // commandConnectInFlight.
+        let dropCode = (error as? CBError)?.code
+        let linkLost = dropCode == .connectionTimeout || dropCode == .peripheralDisconnected
+        let heldCGMLinkLost = holdsLinkForCGM && linkLost && BluetoothManager.connectOnDemandEnabled
+            && autoConnectIDs.contains(peripheral.identifier.uuidString)
+        if shouldHoldConnection && (commandConnectInFlight || heldCGMLinkLost) {
             // Keep-alive (foreground, or a background Pod Keep Alive mode): an unintended drop while we want
-            // to stay connected (a deliberate background/idle disconnect clears commandConnectInFlight first,
-            // so it won't reconnect).
+            // to stay connected. A deliberate background/idle disconnect clears commandConnectInFlight first,
+            // so it won't reconnect; a held CGM link is told apart by its drop error instead.
+            commandConnectInFlight = true
             log.default("[connectOnDemand] keep-alive — reconnecting after drop")
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] keep-alive — reconnecting after drop")
             connectForCommand(peripheral)
         } else if holdsLinkForCGM && BluetoothManager.connectOnDemandEnabled && !isAppForeground
                     && autoConnectIDs.contains(peripheral.identifier.uuidString) {
-            // A deliberate disconnect of the held link, such as a connect timeout: connect again after a
+            // The app's own disconnect of the held link, such as a cancel after a connect-on-demand
+            // timeout, or a drop with another error: connect again after a
             // pause that iOS applies while the app is suspended, so it can't loop. No scan runs alongside,
             // as a concurrent scan starves the connect.
             commandConnectInFlight = true
