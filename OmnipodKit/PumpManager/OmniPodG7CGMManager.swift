@@ -144,6 +144,22 @@ public final class OmniPodG7CGMManager: CGMManager {
     public func getSounds() -> [Alert.Sound] { [] }
 }
 
+// MARK: - DeviceConfigurationSharing
+
+/// Another controller, such as a watch that takes over the Pod, builds its own manager from this
+/// export. The export carries no state: the readings come through the Pod, which is handed over
+/// with the pump manager.
+extension OmniPodG7CGMManager: DeviceConfigurationSharing {
+    public func exportConfiguration() -> SharedDeviceConfiguration {
+        SharedDeviceConfiguration(managerIdentifier: pluginIdentifier, asOf: Date(), state: [:])
+    }
+
+    public convenience init?(adopting configuration: SharedDeviceConfiguration, localState: [String: Any]?) {
+        guard configuration.managerIdentifier == "OmnipodG7" else { return nil }
+        self.init()
+    }
+}
+
 struct O5PodGlucoseDisplay: GlucoseDisplayable {
     let isStateValid: Bool
     let trendType: GlucoseTrend?
