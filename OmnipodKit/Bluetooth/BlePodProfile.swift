@@ -60,6 +60,10 @@ struct BlePodProfile {
                 guard let value = characteristic.value else { return }
 
                 manager.log.bleDebug("[BLE RAW] CMD RECV: %{public}@", value.hexadecimalString)
+                if manager.podType.isO5, BlePodProfile.isGlucoseNudge(value) {
+                    manager.bluetoothManager?.podDidSendGlucoseNudge(value)
+                    return
+                }
                 manager.queueLock.lock()
                 manager.cmdQueue.append(value)
                 manager.queueLock.signal()
@@ -86,6 +90,12 @@ struct BlePodProfile {
 }
 
 extension BlePodProfile {
+    /// An O5 Pod announces a new CGM reading with a command-characteristic value starting 0C 00.
+    /// It is not a reply to a command.
+    static func isGlucoseNudge(_ value: Data) -> Bool {
+        value.count >= 2 && value[value.startIndex] == 0x0C && value[value.startIndex + 1] == 0x00
+    }
+
     static let omnipodDash = BlePodProfile(
         podType: dashType,
         advertisementServiceUUID: dashOmnipodServiceUUID.advertisement.cbUUID,

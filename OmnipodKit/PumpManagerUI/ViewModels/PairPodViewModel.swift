@@ -147,6 +147,17 @@ class PairPodViewModel: ObservableObject, Identifiable {
         return nil
     }
 
+    @Published var earlyControlEnable = false {
+        didSet {
+            podPairer.earlyControlEnableForNextPod = earlyControlEnable
+            if !earlyControlEnable { earlyControlG7Type = false }
+        }
+    }
+
+    @Published var earlyControlG7Type = false {
+        didSet { podPairer.earlyControlG7TypeForNextPod = earlyControlG7Type }
+    }
+
     @Published var state: PairPodViewModelState = .ready
     
     var podIsActivated: Bool {
@@ -185,6 +196,8 @@ class PairPodViewModel: ObservableObject, Identifiable {
     init(podPairer: PodPairer) {
         self.podPairer = podPairer
         self.autoRetryAttempted = false
+        self.earlyControlEnable = podPairer.earlyControlEnableForNextPod
+        self.earlyControlG7Type = podPairer.earlyControlG7TypeForNextPod
         // If resuming, don't wait for the button action
         if podPairer.podCommState == .activating {
             pairAndPrime()
@@ -210,7 +223,7 @@ class PairPodViewModel: ObservableObject, Identifiable {
                         // Some pod fault or failure has occurred
                         let pairAndPrimeError = OmniPairingError.pumpManagerError(error)
                         self.state = .error(pairAndPrimeError)
-                    } else if self.autoRetryAttempted || disableAutoPairRetry {
+                    } else if !OmniPairingError.pumpManagerError(error).recoverable || self.autoRetryAttempted || disableAutoPairRetry {
                         self.autoRetryAttempted = false // allow for an auto retry on the next user attempt
                         let pairAndPrimeError = OmniPairingError.pumpManagerError(error)
                         self.state = .error(pairAndPrimeError)
@@ -297,8 +310,8 @@ enum OmniPairingError : LocalizedError {
         case .pumpManagerError(let error):
             print("OmniPairingError self \(String(describing: self)) got error \(String(describing: error))")
             switch error {
-            case .communication:
-                return true
+            case .communication(let underlying):
+                return !(underlying is O5EarlyControlEnable.Stopped)
             case .configuration:
                 return false
             case .connection:
@@ -313,6 +326,8 @@ enum OmniPairingError : LocalizedError {
 }
 
 protocol PodPairer {
+    var earlyControlEnableForNextPod: Bool { get set }
+    var earlyControlG7TypeForNextPod: Bool { get set }
     func pairAndPrimePod(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void)
     func discardPod(completion: @escaping (Bool) -> ())
     var podCommState: PodCommState { get }
@@ -324,5 +339,16 @@ extension OmniPumpManager: PodPairer {
 
     func pairAndPrimePod(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
         pairAndPrime(completion: completion)
+    }
+}
+
+extension PodPairer {
+    var earlyControlEnableForNextPod: Bool {
+        get { false }
+        set { }
+    }
+    var earlyControlG7TypeForNextPod: Bool {
+        get { false }
+        set { }
     }
 }

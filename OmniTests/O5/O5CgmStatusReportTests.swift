@@ -1,0 +1,111 @@
+//
+//  O5CgmStatusReportTests.swift
+//  OmniTests
+//
+
+import XCTest
+@testable import OmnipodKit
+
+final class O5CgmStatusReportTests: XCTestCase {
+    // First worn Pod after the early enable (firmware 9.0.4 / BLE 5.0.2, 2026-11-20).
+    private let statusAfterEnable = Data(hexadecimalString: "0016fff76b00c1d1000e01000000006b00c1d10003010000")!
+    private let interfaceAfterEnable = Data(hexadecimalString: "000d00ffffffff0100020103010400")!
+    private let emptySensorInfo = Data([0, 0])
+
+    /// A G7 sensor info reply with mask, type, pairing code and serial (keys 0–3).
+    private func g7SensorInfo(code: String, serial: String) -> Data {
+        var body = Data([0x00, 0x00, 0x00, 0x00, 0x0f, 0x01, 0x07, 0x02]) + Data(code.utf8)
+        body += Data([0x03]) + Data(serial.utf8)
+        return Data([0x00, UInt8(body.count)]) + body
+    }
+
+    func testCapturedRepliesAfterEarlyEnable() throws {
+        let status = try O5UnifiedAidStatus(statusAfterEnable)
+        XCTAssertEqual(status.cgmType, 1)
+        XCTAssertNil(status.egv)
+        XCTAssertEqual(status.egvRaw, -9)
+        XCTAssertTrue(status.isManual && status.algorithmReady && status.podActive)
+        XCTAssertEqual(try O5CgmInterfaceStatus(interfaceAfterEnable).control, 0)
+
+        let text = O5CgmStatusReport.text(status: statusAfterEnable, interface: interfaceAfterEnable, sensor: emptySensorInfo)
+        XCTAssertTrue(text.contains("CGM type: 1 (no information)"))
+        XCTAssertTrue(text.contains("Glucose: none (-9, no transmitter identity)"))
+        XCTAssertTrue(text.contains("Control: 0 (enabled)"))
+        XCTAssertTrue(text.contains("No sensor configured"))
+    }
+
+    func testSensorInfoDecodesAndReportHidesTheIdentity() throws {
+        let reply = g7SensorInfo(code: "1234", serial: "123456789012")
+        let info = try O5G7SensorInfo(reply)
+        XCTAssertFalse(info.isEmpty)
+        XCTAssertEqual(info.sensorType, 7)
+        XCTAssertTrue(info.matches(pairingCode: "1234", serialNumber: "123456789012"))
+        XCTAssertFalse(info.matches(pairingCode: "1234", serialNumber: "123456789013"))
+
+        let text = O5CgmStatusReport.text(status: statusAfterEnable, interface: interfaceAfterEnable, sensor: reply)
+        XCTAssertTrue(text.contains("Pairing code: set"))
+        XCTAssertTrue(text.contains("ending in 9012"))
+        XCTAssertFalse(text.contains("1234"))
+        XCTAssertFalse(text.contains("12345678"))
+    }
+
+    func testSensorInfoForAnotherSensorTypeIsRejected() {
+        var reply = g7SensorInfo(code: "1234", serial: "123456789012")
+        reply[8] = 4
+        XCTAssertThrowsError(try O5G7SensorInfo(reply))
+    }
+
+    func testMalformedRepliesAreReportedNotTrusted() {
+        let text = O5CgmStatusReport.text(status: Data([0, 1, 0]), interface: Data([0]), sensor: Data([0, 3, 9]))
+        XCTAssertEqual(text.components(separatedBy: "Invalid O5 reply").count - 1, 3)
+    }
+
+    private func aidStatus(cgmType: UInt8, cgmData: Data = Data()) -> Data {
+        var bytes = Data(repeating: 0, count: 24)
+        bytes[1] = UInt8(22 + cgmData.count); bytes[10] = 1; bytes[20] = 3; bytes[21] = cgmType
+        bytes[23] = UInt8(cgmData.count)
+        return bytes + cgmData
+    }
+
+    func testTypeWithoutDataIsAccepted() throws {
+        let status = try O5UnifiedAidStatus(aidStatus(cgmType: 7))
+        XCTAssertEqual(status.cgmType, 7)
+        XCTAssertNil(status.g7)
+        XCTAssertTrue(status.cgmData.isEmpty)
+    }
+
+    func testWrongNonZeroDataSizeIsStillRejected() {
+        XCTAssertThrowsError(try O5UnifiedAidStatus(aidStatus(cgmType: 7, cgmData: Data(repeating: 0, count: 4))))
+        XCTAssertThrowsError(try O5UnifiedAidStatus(aidStatus(cgmType: 4, cgmData: Data(repeating: 0, count: 16))))
+    }
+
+    func testG7DataIsStillParsed() throws {
+        let block = Data([0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 2, 0, 0xfe, 1])
+        let status = try O5UnifiedAidStatus(aidStatus(cgmType: 7, cgmData: block))
+        XCTAssertEqual(status.g7?.algorithmState, 2)
+        XCTAssertEqual(status.g7?.trendRate, -2)
+    }
+
+    // G4.1 right after desired type 7 was written, before any identity (2026-11-23, 9.0.4).
+    private let placeholderSensorInfo = Data(hexadecimalString: "002f010700000001ff02303030300330303030303030303030303004012c05ffffffffffff06ffffffff07ffffffff0802")!
+
+    func testPlaceholderRecordHasNoIdentity() throws {
+        let info = try O5G7SensorInfo(placeholderSensorInfo)
+        XCTAssertFalse(info.isEmpty)
+        XCTAssertEqual(info.sensorType, 7)
+        XCTAssertEqual(info.pairingCode, Data("0000".utf8))
+        XCTAssertFalse(info.hasIdentity)
+        XCTAssertTrue(info.isPlaceholder)
+
+        XCTAssertFalse(try O5G7SensorInfo(emptySensorInfo).hasIdentity)
+        XCTAssertFalse(try O5G7SensorInfo(emptySensorInfo).isPlaceholder)
+        XCTAssertTrue(try O5G7SensorInfo(g7SensorInfo(code: "1234", serial: "123456789012")).hasIdentity)
+        XCTAssertTrue(try O5G7SensorInfo(g7SensorInfo(code: "0000", serial: "123456789012")).hasIdentity)
+    }
+
+    func testReportNamesThePlaceholderRecord() {
+        let text = O5CgmStatusReport.text(status: statusAfterEnable, interface: interfaceAfterEnable, sensor: placeholderSensorInfo)
+        XCTAssertTrue(text.contains("No identity yet"))
+        XCTAssertFalse(text.contains("Pairing code: set"))
+    }
+}

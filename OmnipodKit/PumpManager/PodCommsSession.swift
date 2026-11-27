@@ -344,6 +344,68 @@ class PodCommsSession: MessageTransportDelegate {
     ///     - PodCommsError.noResponseRL
     ///     - RileyLinkDeviceError
     func send<T: MessageBlock>(_ messageBlocks: [MessageBlock], beepBlock: MessageBlock? = nil, expectFollowOnMessage: Bool = false) throws -> T {
+        guard O5PodDataLog.isEnabled else {
+            return try sendUnlogged(messageBlocks, beepBlock: beepBlock, expectFollowOnMessage: expectFollowOnMessage)
+        }
+        let commands = O5PodDataLog.commandFields(messageBlocks)
+        do {
+            let response: T = try sendUnlogged(messageBlocks, beepBlock: beepBlock, expectFollowOnMessage: expectFollowOnMessage)
+            if commands != nil || response is StatusResponse {
+                var entry: [String: Any] = ["kind": commands != nil ? "command" : "status"]
+                if let commands { entry["commands"] = commands }
+                if let status = response as? StatusResponse {
+                    entry["status"] = O5PodDataLog.statusFields(status)
+                }
+                appendPodDataLog(entry)
+            }
+            return response
+        } catch {
+            if let commands {
+                appendPodDataLog(["kind": "command", "commands": commands, "error": String(describing: error)])
+            }
+            throw error
+        }
+    }
+
+    private func appendPodDataLog(_ entry: [String: Any]) {
+        let pod = podState
+        O5PodDataLog.append(target: pod.earlyControlTarget, header: [
+            "podType": String(describing: pod.podType),
+            "firmware": pod.firmwareVersion,
+            "bleFirmware": pod.iFirmwareVersion,
+            "activatedAt": pod.activatedAt.map { O5PodDataLog.timestamp($0) as Any } ?? NSNull(),
+            "earlyControlEnable": pod.earlyControlEnableID != nil,
+            "earlyControlDesiredSensorType": pod.earlyControlDesiredSensorType.map { Int($0) as Any } ?? NSNull(),
+            "setup": ["tdi": O5AidCommands.TdiCommand.payload().0.hexadecimalString,
+                      "dia": O5AidCommands.DiaCommand.payload().0.hexadecimalString,
+                      "egvThresholds": O5AidCommands.EgvCommand.payload().0.hexadecimalString,
+                      "note": "targets 48 x 110 mg/dL; insulin history 72 zero records"],
+        ], entry: entry)
+    }
+
+    /// One `G3.12` read after a fetched pump status, for the Pod data log and, when the Pod
+    /// serves as the CGM, its G7 glucose. Skipped unless one of them needs it, the Pod is an
+    /// active O5 and no command is pending. Failures are logged and never thrown.
+    func readO5AidStatusAfterStatus(forGlucose: Bool) -> Data? {
+        let logging = O5PodDataLog.isEnabled
+        guard logging || forGlucose, podState.podType.isO5, podState.setupProgress == .completed,
+              podState.fault == nil, podState.unacknowledgedCommand == nil else { return nil }
+        do {
+            let reply = try sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
+            if logging {
+                appendPodDataLog(O5PodDataLog.aidStatusFields(reply))
+            }
+            return reply
+        } catch {
+            if logging {
+                appendPodDataLog(["kind": "aidStatus", "error": String(describing: error)])
+            }
+            log.error("G3.12 read after status failed: %{public}@", String(describing: error))
+            return nil
+        }
+    }
+
+    private func sendUnlogged<T: MessageBlock>(_ messageBlocks: [MessageBlock], beepBlock: MessageBlock? = nil, expectFollowOnMessage: Bool = false) throws -> T {
 
         var triesRemaining = 2  // Retries only happen for nonce resync
         var blocksToSend = messageBlocks
@@ -460,6 +522,7 @@ class PodCommsSession: MessageTransportDelegate {
 
     // Returns time at which prime is expected to finish.
     func prime() throws -> TimeInterval {
+        try checkEarlyControlAdmission(requireArmed: true)
         let primeDuration: TimeInterval = .seconds(Pod.primeUnits / Pod.primeDeliveryRate) + 3 // as per PDM
 
         // If priming has never been attempted on this pod, handle the pre-prime setup tasks.
@@ -508,6 +571,7 @@ class PodCommsSession: MessageTransportDelegate {
     }
 
     func programInitialBasalSchedule(_ basalSchedule: BasalSchedule, scheduleOffset: TimeInterval) throws {
+        try checkEarlyControlAdmission(requireArmed: true)
         if podState.setupProgress == .settingInitialBasalSchedule {
             // We started basal schedule programming, but didn't get confirmation somehow, so check status
             let status = try getStatus()
@@ -603,8 +667,26 @@ class PodCommsSession: MessageTransportDelegate {
         }
     }
 
-    private func markSetupProgressCompleted(statusResponse: StatusResponse) {
+    private func checkEarlyControlAdmission(requireArmed: Bool = false) throws {
+        if let id = podState.earlyControlEnableID {
+            try O5EarlyControlEnable.check(id: id, target: podState.earlyControlTarget,
+                firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion, requireArmed: requireArmed)
+        }
+    }
+
+    private func markSetupProgressCompleted(statusResponse: StatusResponse) throws {
         if (podState.setupProgress != .completed) {
+            if let id = podState.earlyControlEnableID {
+                assertOnSessionQueue()
+                guard podState.podType.isO5, statusResponse.podProgressStatus.readyForDelivery,
+                      podState.fault == nil, podState.unacknowledgedCommand == nil else {
+                    throw PodCommsError.diagnosticMessage(str: "Early control enable requires completed insertion and no pending command or fault")
+                }
+                try O5EarlyControlEnable.finish(id: id, target: podState.earlyControlTarget,
+                    firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+                    send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+                    detailedStatus: { try self.getDetailedStatus().data })
+            }
             podState.setupProgress = .completed
             podState.setupUnitsDelivered = statusResponse.insulinDelivered // stash the current insulin delivered value as the baseline
             log.info("Total setup units delivered: %@", String(describing: statusResponse.insulinDelivered))
@@ -612,6 +694,10 @@ class PodCommsSession: MessageTransportDelegate {
     }
 
     func insertCannula(basalSchedule: BasalSchedule? = nil, scheduleOffset: TimeInterval = 0, optionalAlerts: [PodAlert] = [], silent: Bool) throws -> TimeInterval {
+
+        let recoveringInsertion = [SetupProgress.startingInsertCannula, .cannulaInserting, .completed].contains(podState.setupProgress)
+        try checkEarlyControlAdmission(requireArmed: !recoveringInsertion)
+        if podState.earlyControlEnableID != nil && podState.setupProgress == .completed { return 0 }
 
         let cannulaInsertionUnits = Pod.cannulaInsertionUnits + Pod.cannulaInsertionUnitsExtra
 
@@ -628,8 +714,11 @@ class PodCommsSession: MessageTransportDelegate {
                 return (status.bolusNotDelivered / Pod.primeDeliveryRate) + 1
             }
             if status.podProgressStatus.readyForDelivery {
-                markSetupProgressCompleted(statusResponse: status)
+                try markSetupProgressCompleted(statusResponse: status)
                 return TimeInterval(0) // Already done; no need to wait
+            }
+            if podState.earlyControlEnableID != nil {
+                throw PodCommsError.diagnosticMessage(str: "Cannula insertion status is unexpected; review before continuing the early control experiment")
             }
         } else {
             let elapsed: TimeInterval = -(podState.podTimeUpdated?.timeIntervalSinceNow ?? 0)
@@ -664,10 +753,15 @@ class PodCommsSession: MessageTransportDelegate {
     }
 
     func checkInsertionCompleted() throws {
+        if podState.earlyControlEnableID != nil && podState.setupProgress != .cannulaInserting && podState.setupProgress != .completed {
+            throw PodCommsError.diagnosticMessage(str: "Cannula insertion has not been confirmed; early control enable is pending")
+        }
         if podState.setupProgress == .cannulaInserting {
             let response = try getStatus()
             if response.podProgressStatus.readyForDelivery {
-                markSetupProgressCompleted(statusResponse: response)
+                try markSetupProgressCompleted(statusResponse: response)
+            } else if podState.earlyControlEnableID != nil {
+                throw PodCommsError.diagnosticMessage(str: "Cannula insertion is not finished; early control enable is pending")
             }
         }
     }
@@ -1038,6 +1132,83 @@ class PodCommsSession: MessageTransportDelegate {
     // A bolus can't run past a pod fault that came before the cancel
     private func bolusStoppedAt(_ commandDate: Date) -> Date {
         return min(commandDate, podState.deliveryStoppedAt ?? commandDate)
+    }
+
+    /// Experimental: sends a Dexcom G7 identity to an O5 Pod whose control was enabled at
+    /// activation. One shot per Pod; see O5G7Identity.
+    func sendO5G7Identity(pairingCode: String, serialNumber: String) throws -> String {
+        assertOnSessionQueue()
+        guard podState.podType.isO5, podState.setupProgress == .completed, podState.fault == nil,
+              podState.unacknowledgedCommand == nil else {
+            throw PodCommsError.diagnosticMessage(str: "The G7 identity needs an active Omnipod 5 Pod with completed setup, no fault and no pending command")
+        }
+        return try O5G7Identity.send(target: podState.earlyControlTarget, firmware: podState.firmwareVersion,
+            bleFirmware: podState.iFirmwareVersion, pairingCode: pairingCode, serialNumber: serialNumber,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    /// Experimental G7 type experiment, step 1: write desired sensor type 7. See O5G7TypeExperiment.
+    func setO5G7DesiredType() throws -> String {
+        try checkO5ExperimentPod()
+        return try O5G7TypeExperiment.setDesiredType(target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    /// Experimental G7 type experiment, step 2: the identity batch. See O5G7TypeExperiment.
+    func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) throws -> String {
+        try checkO5ExperimentPod()
+        return try O5G7TypeExperiment.sendIdentityBatch(target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+            pairingCode: pairingCode, serialNumber: serialNumber, typeSetAtActivation: g7TypeSetAtActivation,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    /// Experimental G7 type experiment, step 3: replace the stored identity. See O5G7TypeExperiment.
+    func replaceO5G7Identity(pairingCode: String, serialNumber: String) throws -> String {
+        try checkO5ExperimentPod()
+        return try O5G7TypeExperiment.replaceIdentity(target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion,
+            pairingCode: pairingCode, serialNumber: serialNumber,
+            send: { try self.sendO5AidCommand((data: $0, responsePrefix: $1)) },
+            detailedStatus: { try self.getDetailedStatus().data })
+    }
+
+    /// Reads the Pod's CGM interface and G7 record and returns the next Add G7 step. Sends no write.
+    func o5G7AddStep() throws -> O5G7AddStep {
+        try checkO5ExperimentPod()
+        let interface = try O5CgmInterfaceStatus(sendO5AidCommand((data: Data("G4.2".utf8), responsePrefix: "4.2=")))
+        let sensor = try O5G7SensorInfo(sendO5AidCommand((data: Data("G4.1".utf8), responsePrefix: "4.1=")))
+        let progress = try O5G7TypeExperiment.progress(target: podState.earlyControlTarget)
+        return O5G7AddStep.next(
+            pod: .init(control: interface.control, desiredSensorType: interface.desiredSensorType, hasIdentity: sensor.hasIdentity),
+            progress: progress, typeSetAtActivation: g7TypeSetAtActivation, now: Date())
+    }
+
+    /// Whether the early control enable at activation set desired type G7 and read it back.
+    private var g7TypeSetAtActivation: Bool {
+        guard let id = podState.earlyControlEnableID, podState.earlyControlDesiredSensorType == 7 else { return false }
+        return (try? O5EarlyControlEnable.verifiedDesiredSensorType(id: id, target: podState.earlyControlTarget,
+            firmware: podState.firmwareVersion, bleFirmware: podState.iFirmwareVersion)) == 7
+    }
+
+    private func checkO5ExperimentPod() throws {
+        assertOnSessionQueue()
+        guard podState.podType.isO5, podState.setupProgress == .completed, podState.fault == nil,
+              podState.unacknowledgedCommand == nil else {
+            throw PodCommsError.diagnosticMessage(str: "This needs an active Omnipod 5 Pod with completed setup, no fault and no pending command")
+        }
+    }
+
+    /// Sends an O5 AID command (see O5AidCommands) and returns the reply body after its prefix.
+    func sendO5AidCommand(_ command: (data: Data, responsePrefix: String)) throws -> Data {
+        guard let bleTransport = transport as? BlePodMessageTransport, podState.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "O5 AID commands require an Omnipod 5 pod")
+        }
+        return try bleTransport.sendO5AidCommand(command.data, responsePrefix: command.responsePrefix)
     }
 
     // Reconnected to the pod, and we know program was successful based on lastProgrammingMessageSeqNum

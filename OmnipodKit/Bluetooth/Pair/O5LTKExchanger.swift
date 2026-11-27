@@ -404,7 +404,7 @@ class O5LTKExchanger {
         // Short path: entire decrypted payload is the pod certificate DER (no signature)
         let podCertDER = decryptedPayload
         log.default("Pod SPS2.1 decrypted: %{public}d bytes (pod cert DER, short path)", podCertDER.count)
-        log.info("Pod cert DER (%{public}d bytes): %{public}@", podCertDER.count, podCertDER.hexadecimalString)
+        logCertificateDER("SPS2.1", podCertDER)
 
         // Extract and log the pod certificate details
         if let podPubKeyRaw = O5CertificateStore.extractP256PublicKey(fromDERCert: podCertDER) {
@@ -415,6 +415,20 @@ class O5LTKExchanger {
 
         if let serial = O5CertificateStore.extractSerialNumber(fromDERCert: podCertDER) {
             log.info("Pod SPS2.1 cert serial (%{public}d bytes): %{public}@", serial.count, serial.hexadecimalString)
+        }
+    }
+
+    /// Logs a certificate the pod sent, in chunks short enough to survive `log collect`.
+    private func logCertificateDER(_ label: String, _ der: Data) {
+        let hex = der.hexadecimalString
+        let chunkLength = 256
+        let chunkCount = (hex.count + chunkLength - 1) / chunkLength
+        let digest = CryptoKit.SHA256.hash(data: der).map { String(format: "%02x", $0) }.joined()
+        log.default("Pod %{public}@ certificate: %{public}d bytes, sha256 %{public}@", label, der.count, digest)
+        for index in 0..<chunkCount {
+            let start = hex.index(hex.startIndex, offsetBy: index * chunkLength)
+            let end = hex.index(start, offsetBy: min(chunkLength, hex.distance(from: start, to: hex.endIndex)))
+            log.default("Pod %{public}@ certificate %{public}d/%{public}d: %{public}@", label, index + 1, chunkCount, String(hex[start..<end]))
         }
     }
 
@@ -508,7 +522,7 @@ class O5LTKExchanger {
         let podSignature = decryptedPayload.subdata(in: certLen..<decryptedPayload.count)
 
         log.default("Pod SPS2 decrypted: %{public}d bytes (cert_DER=%{public}d + sig=%{public}d)", decryptedPayload.count, certLen, podSignature.count)
-        log.info("Pod cert DER (%{public}d bytes): %{public}@", podCertDER.count, podCertDER.hexadecimalString)
+        logCertificateDER("SPS2", podCertDER)
         log.info("Pod signature (64 bytes): %{public}@", podSignature.hexadecimalString)
 
         // Extract pod's public key from its DER certificate

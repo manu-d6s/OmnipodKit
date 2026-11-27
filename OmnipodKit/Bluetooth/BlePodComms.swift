@@ -294,7 +294,7 @@ class BlePodComms: PodComms {
 
     // Handles negotiating the LTK (if needed), establishing the session and transport,
     // running the AssignVesion command, and then creating the PodState for the pod.
-    private func pairPod(insulinType: InsulinType) throws {
+    private func pairPod(insulinType: InsulinType, earlyControlEnable: Bool, earlyControlG7Type: Bool) throws {
         // We should already be holding podStateLock during calls to this function, so try() should fail
         assert(!podStateLock.try(), "\(#function) should be invoked while holding podStateLock")
 
@@ -354,6 +354,8 @@ class BlePodComms: PodComms {
         // Now create the real PodState using the current transport state and the versionResponse info
         log.bleDebug("@@@ pairPod: creating PodState for versionResponse %{public}@ and transport state %{public}@", String(describing: versionResponse), transport.state.inlineDescription)
 
+        let earlyControlEnableID = podType.isO5 && earlyControlEnable ? UUID().uuidString : nil
+        let earlyControlDesiredSensorType: UInt8? = earlyControlEnableID != nil && earlyControlG7Type ? 7 : nil
         self.podState = PodState(
             address: podId,
             firmwareVersion: String(describing: versionResponse.firmwareVersion),
@@ -362,11 +364,22 @@ class BlePodComms: PodComms {
             lotSeq: versionResponse.tid,
             insulinType: insulinType,
             podType: versionResponse.podType,
+            earlyControlEnableID: earlyControlEnableID,
+            earlyControlDesiredSensorType: earlyControlDesiredSensorType,
             bleMessageTransportState: transport.state,
             ltk: ltk,
             bleIdentifier: manager.peripheral.identifier.uuidString,
             signingKey: signingKey,
         )
+
+        if let id = earlyControlEnableID {
+            // The marker is already in the published PodState. A failed record
+            // creation must stop rather than silently skip the opt-in.
+            let state = self.podState!
+            try O5EarlyControlEnable.arm(id: id, target: state.earlyControlTarget,
+                firmware: state.firmwareVersion, bleFirmware: state.iFirmwareVersion,
+                desiredSensorType: earlyControlDesiredSensorType)
+        }
 
         // podState setupProgress state should be addressAssigned
 
@@ -525,59 +538,64 @@ class BlePodComms: PodComms {
     private func o5SendAidSetupCommands(transport: BlePodMessageTransport) throws {
 
         // Command 1: UTC time
-        log.bleDebug("@@@ O5 AID [1/9]: UtcCommand — setting pod UTC time")
+        log.default("@@@ O5 AID [1/9]: UtcCommand — setting pod UTC time")
         do {
             let (payload, prefix) = O5AidCommands.UtcCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.extendedSet(response, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [1/9]: UtcCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [1/9]: UtcCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [1/9]: UtcCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 2: TDI (Therapy Delivery Information)
-        log.bleDebug("@@@ O5 AID [2/9]: TdiCommand — setting therapy delivery info")
+        log.default("@@@ O5 AID [2/9]: TdiCommand — setting therapy delivery info")
         do {
             let (payload, prefix) = O5AidCommands.TdiCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [2/9]: TdiCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [2/9]: TdiCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [2/9]: TdiCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 3: Target BG Profile (48 half-hour targets, all 110 mg/dL)
-        log.bleDebug("@@@ O5 AID [3/9]: TargetBgProfileCommand — setting 48 half-hour BG targets (all 110 mg/dL)")
+        log.default("@@@ O5 AID [3/9]: TargetBgProfileCommand — setting 48 half-hour BG targets (all 110 mg/dL)")
         do {
             let (payload, prefix) = O5AidCommands.TargetBgProfileCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
-            log.bleDebug("@@@ O5 AID [3/9]: TargetBgProfileCommand response: %{public}d bytes", response.count)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
+            log.default("@@@ O5 AID [3/9]: TargetBgProfileCommand response: %{public}d bytes", response.count)
         } catch {
             log.error("@@@ O5 AID [3/9]: TargetBgProfileCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 4: DIA (Duration of Insulin Action)
-        log.bleDebug("@@@ O5 AID [4/9]: DiaCommand — setting DIA=8")
+        log.default("@@@ O5 AID [4/9]: DiaCommand — setting DIA=8")
         do {
             let (payload, prefix) = O5AidCommands.DiaCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [4/9]: DiaCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [4/9]: DiaCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [4/9]: DiaCommand failed: %{public}@", String(describing: error))
             throw error
         }
 
         // Command 5: EGV (Estimated Glucose Value config)
-        log.bleDebug("@@@ O5 AID [5/9]: EgvCommand — setting EGV config=3670015")
+        log.default("@@@ O5 AID [5/9]: EgvCommand — setting EGV config=3670015")
         do {
             let (payload, prefix) = O5AidCommands.EgvCommand.payload()
             let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+            try O5AidReplyCheck.setGet(response, request: payload, responsePrefix: prefix)
             let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-            log.bleDebug("@@@ O5 AID [5/9]: EgvCommand response: %{public}@", responseStr)
+            log.default("@@@ O5 AID [5/9]: EgvCommand response: %{public}@", responseStr)
         } catch {
             log.error("@@@ O5 AID [5/9]: EgvCommand failed: %{public}@", String(describing: error))
             throw error
@@ -585,12 +603,13 @@ class BlePodComms: PodComms {
 
         // Commands 6-8: Algorithm Insulin History (3 batches of 24 zero records)
         for batch in 1...3 {
-            log.bleDebug("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistoryCommand batch %{public}d/3", batch + 5, batch)
+            log.default("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistoryCommand batch %{public}d/3", batch + 5, batch)
             do {
                 let (payload, prefix) = O5AidCommands.AlgorithmInsulinHistoryCommand.payload()
                 let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
+                try O5AidReplyCheck.extendedSet(response, responsePrefix: prefix)
                 let responseStr = String(data: response, encoding: .utf8) ?? response.hexadecimalString
-                log.bleDebug("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 response: %{public}@",
+                log.default("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 response: %{public}@",
                              batch + 5, batch, responseStr)
             } catch {
                 log.error("@@@ O5 AID [%{public}d/9]: AlgorithmInsulinHistory batch %{public}d/3 failed: %{public}@",
@@ -604,19 +623,19 @@ class BlePodComms: PodComms {
         // so OK to just skip this command if majorVersion not available.
         let majorVersion = parseMajorVersion(from: podState!.firmwareVersion)
         if skipO5AID9 || majorVersion == nil {
-            log.bleDebug("@@@ O5 AID [9/9]: skipping Pod Status query...")
+            log.default("@@@ O5 AID [9/9]: skipping Pod Status query...")
         } else {
             do {
                 let useGen1AidPodStatus = o5PodIsV1(majorVersion: majorVersion!)
                 if useGen1AidPodStatus {
                     let (payload, prefix) = O5AidCommands.AidPodStatusCommand.payload()
                     let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
-                    log.bleDebug("@@@ O5 AID [9/9]: AidPodStatusCommand (G3.11) response: %d bytes — %{public}@",
+                    log.default("@@@ O5 AID [9/9]: AidPodStatusCommand (G3.11) response: %d bytes — %{public}@",
                              response.count, response.hexadecimalString)
                 } else {
                     let (payload, prefix) = O5AidCommands.UnifiedAidPodStatusCommand.payload()
                     let response = try transport.sendO5AidCommand(payload, responsePrefix: prefix)
-                    log.bleDebug("@@@ O5 AID [9/9]: UnifiedAidPodStatusCommand (G3.12) response: %d bytes — %{public}@",
+                    log.default("@@@ O5 AID [9/9]: UnifiedAidPodStatusCommand (G3.12) response: %d bytes — %{public}@",
                              response.count, response.hexadecimalString)
                 }
             } catch {
@@ -715,6 +734,8 @@ class BlePodComms: PodComms {
         timeZone: TimeZone,
         insulinType: InsulinType,
         messageLogger: MessageLogger?,
+        earlyControlEnable: Bool = false,
+        earlyControlG7Type: Bool = false,
         _ block: @escaping (_ result: SessionRunResult) -> Void
     ) {
         guard let manager = manager else {
@@ -739,7 +760,8 @@ class BlePodComms: PodComms {
                     // Fresh pod: full pairing sequence (HELLO + LTK + EAP-AKA)
                     try manager.sendHello(myId: myId)
                     try manager.enableNotifications() // Seemingly this cannot be done before the hello command, or the pod disconnects
-                    try pairPod(insulinType: insulinType)
+                    try pairPod(insulinType: insulinType, earlyControlEnable: earlyControlEnable,
+                                earlyControlG7Type: earlyControlG7Type)
                 } else if !needsSessionEstablishment,
                           let ck = podState?.bleMessageTransportState.ck,
                           !ck.isEmpty {
@@ -756,6 +778,18 @@ class BlePodComms: PodComms {
                 guard podState != nil else {
                     block(.failure(PodCommsError.noPodPaired))
                     return
+                }
+
+                if let id = podState!.earlyControlEnableID {
+                    do {
+                        try O5EarlyControlEnable.check(id: id, target: podState!.earlyControlTarget,
+                            firmware: podState!.firmwareVersion, bleFirmware: podState!.iFirmwareVersion)
+                    } catch {
+                        // Stop before priming/insertion on a mismatched or
+                        // missing record. Normal deactivation remains available.
+                        podState!.setupProgress = .podIncompatible
+                        throw PodCommsError.podIncompatible(str: error.localizedDescription)
+                    }
                 }
 
                 // The O5 specific AID setup commands must be done
@@ -894,6 +928,10 @@ extension BlePodComms: OmniConnectionDelegate {
 
     func omnipodDidDetectAlert(slots: AlertSet) {
         delegate?.omnipodDidDetectAlert(slots: slots)
+    }
+
+    func omnipodDidReceiveGlucoseNudge() {
+        delegate?.omnipodDidReceiveGlucoseNudge()
     }
 
     /// Lift the fault-listener re-wake suppression once all pod alerts have cleared (OmniPumpManager

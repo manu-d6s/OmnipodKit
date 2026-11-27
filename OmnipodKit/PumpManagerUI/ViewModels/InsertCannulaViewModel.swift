@@ -189,7 +189,7 @@ class InsertCannulaViewModel: ObservableObject, Identifiable {
                         self.state = .finished
                     }
                 case .failure(let error):
-                    if self.autoRetryAttempted {
+                    if !error.recoverable || self.autoRetryAttempted {
                         self.autoRetryAttempted = false // allow for an auto retry on the next user attempt
                         self.state = .error(error)
                     } else {
@@ -231,6 +231,9 @@ class InsertCannulaViewModel: ObservableObject, Identifiable {
 
 extension OmniPumpManagerError {
     var recoverable: Bool {
+        if case .communication(let error) = self, error is O5EarlyControlEnable.Stopped {
+            return false
+        }
         //TODO
         return true
 //        switch self {

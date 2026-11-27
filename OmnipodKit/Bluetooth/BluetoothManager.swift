@@ -106,6 +106,10 @@ protocol OmniConnectionDelegate: AnyObject {
     /// A takeover scan adopted the pod as `uuidString`, this device's own peripheral UUID. The
     /// delegate records it as the pod's bleIdentifier.
     func omnipodDidAdoptLoanPod(uuidString: String)
+
+    /// Tells the delegate an O5 Pod sent its glucose nudge (`0C 00` on the command characteristic),
+    /// which announces a new CGM reading.
+    func omnipodDidReceiveGlucoseNudge()
 }
 
 extension OmniConnectionDelegate {
@@ -113,6 +117,7 @@ extension OmniConnectionDelegate {
     func omnipodHeartbeatDidFire() {}
     func omnipodDidDetectAlert(slots: AlertSet) {}
     func omnipodDidAdoptLoanPod(uuidString: String) {}
+    func omnipodDidReceiveGlucoseNudge() {}
 }
 
 
@@ -653,12 +658,34 @@ class BluetoothManager: NSObject {
     var shouldHoldConnection: Bool {
         guard holdsConnectionBetweenCommands else { return false }
         if isAppForeground { return true }
+        if holdsLinkForCGM { return true }
         return podKeepAliveKeepsConnectedInBackground
     }
 
     /// False for a pod this controller was handed by another: the link is never held open between
     /// commands, foreground or Pod Keep Alive, so the controller that handed it over can take it back.
     var holdsConnectionBetweenCommands = true
+
+    /// Experimental: hold an O5 Pod's link in the background while it serves as the CGM, the way the
+    /// background Pod Keep Alive modes do, so the Pod's glucose nudge reaches the app at once. The
+    /// delayed-connect heartbeat doesn't run while the link is held.
+    static var holdO5LinkForCGM: Bool {
+        get { UserDefaults.standard.bool(forKey: "OmnipodKit.holdO5LinkForCGM") }
+        set { UserDefaults.standard.set(newValue, forKey: "OmnipodKit.holdO5LinkForCGM") }
+    }
+
+    var holdsLinkForCGM: Bool {
+        podType.isO5 && BluetoothManager.holdO5LinkForCGM && O5PodCGMLink.shared.cgm?.isInUse == true
+    }
+
+    /// Called by PeripheralManager when an O5 Pod sends its glucose nudge.
+    func podDidSendGlucoseNudge(_ value: Data) {
+        managerQueue.async {
+            self.log.default("[cgmNudge] %{public}@", value.hexadecimalString)
+            self.connectionDelegate?.omnipodLogDeviceEvent("[cgmNudge] \(value.hexadecimalString) (foreground \(self.isAppForeground))")
+            self.connectionDelegate?.omnipodDidReceiveGlucoseNudge()
+        }
+    }
 
     /// True once this PROCESS has ever been foregrounded. A [delayedConnect] with everFg=false means
     /// iOS ran this process entirely in the background — proof of a background wake/relaunch the user
@@ -1011,6 +1038,7 @@ class BluetoothManager: NSObject {
     func disconnectFromDevice(uuidString: String) {
         managerQueue.async {
             self.autoConnectIDs.remove(uuidString)
+            self.commandConnectInFlight = false   // no connect is owed to a discarded pod
             // Prune the discarded pod from devices[] (otherwise append-only) and drop any connection, so
             // a stale device can't be picked up later by the heartbeat/keep-alive machinery or churned
             // while pairing a new pod. (devices[] never being pruned is long-standing; this closes it.)
@@ -1399,8 +1427,12 @@ class BluetoothManager: NSObject {
         isAppForeground = false
         guard let peripheral = keepAlivePeripheral else { return }
         if shouldHoldConnection {   // background Pod Keep Alive mode — do NOT disconnect
-            log.default("[connectOnDemand] background — Pod Keep Alive holding connection (no disconnect)")
-            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] background — Pod Keep Alive holding connection")
+            let reason = [holdsLinkForCGM ? "CGM nudge hold" : nil,
+                          podKeepAliveKeepsConnectedInBackground ? "Pod Keep Alive" : nil,
+                          shouldUseEagerConnect(for: peripheral) ? "eager connect" : nil]
+                .compactMap { $0 }.joined(separator: ", ")
+            log.default("[connectOnDemand] background — %{public}@ holding connection (no disconnect)", reason)
+            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] background — \(reason) holding connection")
             if peripheral.state == .disconnected {
                 // We want it held connected but it's currently down — reconnect so keep-alive can refresh it.
                 beginCommandConnect(peripheral)
@@ -2069,6 +2101,21 @@ extension BluetoothManager: CBCentralManagerDelegate {
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] keep-alive — reconnecting after drop")
             connectForCommand(peripheral)
         case .idle(let armProbe):
+            if holdsLinkForCGM && BluetoothManager.connectOnDemandEnabled && !isAppForeground
+                && !situation.sessionActive && situation.autoConnect {
+                // A deliberate disconnect of the held link, such as a connect timeout: connect again after a
+                // pause that iOS applies while the app is suspended, so it can't loop. No scan runs alongside,
+                // as a concurrent scan starves the connect.
+                commandConnectInFlight = true
+                log.default("[connectOnDemand] CGM nudge hold — reconnecting in 30s after a deliberate disconnect")
+                connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] CGM nudge hold — reconnecting in 30s after a deliberate disconnect")
+                let target = manager.retrievePeripherals(withIdentifiers: [peripheral.identifier]).first ?? peripheral
+                if let device = devices.first(where: { $0.manager.peripheral.identifier == peripheral.identifier }) {
+                    device.manager.peripheral = target
+                }
+                manager.connect(target, options: [CBConnectPeripheralOptionStartDelayKey: NSNumber(value: 30)])
+                break
+            }
             resumeScanIfNeeded()
             if armProbe {
                 issueDelayedConnectProbe(peripheral)

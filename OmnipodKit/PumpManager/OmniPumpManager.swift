@@ -146,6 +146,7 @@ public class OmniPumpManager: RileyLinkPumpManager {
     // Common initialization used after all mandatory fields are initialized
     fileprivate func finishInit(podType: PodType)
     {
+        O5PodCGMLink.shared.pump = self
         self.podComms.delegate = self
         self.podComms.messageLogger = self
 
@@ -221,6 +222,9 @@ public class OmniPumpManager: RileyLinkPumpManager {
     private let podStateObservers = WeakSynchronizedSet<PodStateObserver>()
 
     private let pumpDelegate = WeakSynchronizedDelegate<PumpManagerDelegate>()
+
+    /// The latest G7 state and reading from the Pod's G3.12 status, when the Pod serves as the CGM.
+    let lockedPodGlucose = Locked<O5PodGlucoseState>(O5PodGlucoseState())
 
     let log = OSLog(category: "OmniPumpManager")
 
@@ -442,6 +446,15 @@ public class OmniPumpManager: RileyLinkPumpManager {
     func omnipodHeartbeatDidFire() {
         // A pump-provided heartbeat wake (delayed-connect probe) completed — run a Loop cycle. Loop's
         // resulting status/dose commands connect on demand (which preempts the re-armed probe).
+        readPodGlucoseOnWake("heartbeat", skippingReadingsNewerThan: .minutes(4.5))
+        issueHeartbeatIfNeeded()
+    }
+
+    func omnipodDidReceiveGlucoseNudge() {
+        let sinceReading = lockedPodGlucose.value.latest?.reading.map { String(format: "%.0fs", -$0.date.timeIntervalSinceNow) } ?? "?"
+        logDeviceCommunication("[cgmNudge] glucose nudge, last reading \(sinceReading) ago", type: .connection)
+        // The nudge announces a new reading; skip only a reading that was just taken.
+        readPodGlucoseOnWake("nudge", skippingReadingsNewerThan: .minutes(1))
         issueHeartbeatIfNeeded()
     }
 
@@ -629,7 +642,7 @@ extension OmniPumpManager {
         )
     }
 
-    private func device(for state: OmniPumpManagerState) -> HKDevice {
+    func device(for state: OmniPumpManagerState) -> HKDevice {
         if let podState = state.podState {
             return HKDevice(
                 name: pluginIdentifier,
@@ -1423,6 +1436,35 @@ extension OmniPumpManager {
 
     // MARK: - Pairing
 
+    var earlyControlEnableForNextPod: Bool {
+        get {
+            guard state.podType.isO5 else { return false }
+            if let pod = state.podState { return pod.earlyControlEnableID != nil }
+            return state.earlyControlEnableForNextPod
+        }
+        set {
+            setState { state in
+                guard state.podState == nil, state.podType.isO5 else { return }
+                state.earlyControlEnableForNextPod = newValue
+            }
+        }
+    }
+
+    /// With the early control enable, also set desired sensor type G7 at activation.
+    var earlyControlG7TypeForNextPod: Bool {
+        get {
+            guard state.podType.isO5 else { return false }
+            if let pod = state.podState { return pod.earlyControlDesiredSensorType == 7 }
+            return state.earlyControlG7TypeForNextPod
+        }
+        set {
+            setState { state in
+                guard state.podState == nil, state.podType.isO5 else { return }
+                state.earlyControlG7TypeForNextPod = newValue
+            }
+        }
+    }
+
     // Called on the main thread
     func pairAndPrime(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
 
@@ -1523,7 +1565,9 @@ extension OmniPumpManager {
 
         // Common code that invokes blePairAndSetupPod and then a primingSession if successful
         func blePairSetupPrimePod(blePodComms: BlePodComms) {
-            blePodComms.blePairAndSetupPod(timeZone: .currentFixed, insulinType: insulinType, messageLogger: self) { (result) in
+            blePodComms.blePairAndSetupPod(timeZone: .currentFixed, insulinType: insulinType, messageLogger: self,
+                earlyControlEnable: self.earlyControlEnableForNextPod,
+                earlyControlG7Type: self.earlyControlEnableForNextPod && self.earlyControlG7TypeForNextPod) { (result) in
                 switch result {
                 case .success:
                     // Calls completion
@@ -1800,7 +1844,7 @@ extension OmniPumpManager {
     }
 
     // Used to serialize a set of Pod Commands for a given session - vectors to correct version
-    private func runSession(withName name: String, _ block: @escaping (_ result: PodComms.SessionRunResult) -> Void) {
+    func runSession(withName name: String, _ block: @escaping (_ result: PodComms.SessionRunResult) -> Void) {
         // A controller that has released the pod takes no commands until it takes control again.
         if state.podConnectionReleased {
             log.default("'%{public}@' refused — control of the pod is released", name)
@@ -1885,6 +1929,10 @@ extension OmniPumpManager {
                 case .success(let session):
                     let status = self.handlePodUpdatesAsNeeded(session: session, canOptimize: canOptimize)
                     completion?(.success(status))
+                    // After the completion, so a slow or failed read never delays the caller.
+                    if status != nil, let reply = session.readO5AidStatusAfterStatus(forGlucose: self.podServesAsCGM) {
+                        self.publishPodGlucose(from: reply, receivedAt: self.dateGenerator())
+                    }
                 case .failure(let error):
                     self.evaluateStatus()
                     throw error
@@ -2249,6 +2297,99 @@ extension OmniPumpManager {
                         continuation.resume(throwing: error)
                     }
                 } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Reads the O5 AID status (G3.12), CGM interface (G4.2) and sensor info (G4.1).
+    /// Read-only: nothing is written to the Pod.
+    func readO5CgmStatus() async throws -> String {
+        guard self.hasSetupPod else {
+            throw OmniPumpManagerError.noPodPaired
+        }
+        guard state.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "The O5 CGM status is only available for an Omnipod 5 Pod")
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.runSession(withName: "Read O5 CGM Status") { (result) in
+                switch result {
+                case .success(let session):
+                    continuation.resume(with: Result {
+                        let status = try session.sendO5AidCommand((data: Data("G3.12".utf8), responsePrefix: "3.12="))
+                        let interface = try session.sendO5AidCommand((data: Data("G4.2".utf8), responsePrefix: "4.2="))
+                        let sensor = try session.sendO5AidCommand((data: Data("G4.1".utf8), responsePrefix: "4.1="))
+                        return O5CgmStatusReport.text(status: status, interface: interface, sensor: sensor)
+                    })
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Experimental, one shot per Pod: sends a Dexcom G7 identity to the active O5 Pod.
+    func sendO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String {
+        guard self.hasActivePod else {
+            throw OmniPumpManagerError.noPodPaired
+        }
+        guard state.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "The G7 identity is only available for an Omnipod 5 Pod")
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.runSession(withName: "Send O5 G7 Identity") { (result) in
+                switch result {
+                case .success(let session):
+                    continuation.resume(with: Result {
+                        try session.sendO5G7Identity(pairingCode: pairingCode, serialNumber: serialNumber)
+                    })
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Experimental G7 type experiment, step 1. See O5G7TypeExperiment.
+    func setO5G7DesiredType() async throws -> String {
+        try await runO5Session(withName: "Set O5 G7 Desired Type") { try $0.setO5G7DesiredType() }
+    }
+
+    /// Experimental G7 type experiment, step 2. See O5G7TypeExperiment.
+    func sendO5G7IdentityBatchAfterType(pairingCode: String, serialNumber: String) async throws -> String {
+        try await runO5Session(withName: "Send O5 G7 Identity Batch") {
+            try $0.sendO5G7IdentityBatchAfterType(pairingCode: pairingCode, serialNumber: serialNumber)
+        }
+    }
+
+    /// Experimental G7 type experiment, step 3. See O5G7TypeExperiment.
+    func replaceO5G7Identity(pairingCode: String, serialNumber: String) async throws -> String {
+        try await runO5Session(withName: "Replace O5 G7 Identity") {
+            try $0.replaceO5G7Identity(pairingCode: pairingCode, serialNumber: serialNumber)
+        }
+    }
+
+    /// Reads the Pod and returns the next step for giving it a G7. See O5G7AddStep.
+    func o5G7AddStep() async throws -> O5G7AddStep {
+        try await runO5Session(withName: "Read O5 G7 Add Step") { try $0.o5G7AddStep() }
+    }
+
+    private func runO5Session<T>(withName name: String, _ block: @escaping (PodCommsSession) throws -> T) async throws -> T {
+        guard self.hasActivePod else {
+            throw OmniPumpManagerError.noPodPaired
+        }
+        guard state.podType.isO5 else {
+            throw PodCommsError.diagnosticMessage(str: "This is only available for an Omnipod 5 Pod")
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.runSession(withName: name) { (result) in
+                switch result {
+                case .success(let session):
+                    continuation.resume(with: Result { try block(session) })
+                case .failure(let error):
                     continuation.resume(throwing: error)
                 }
             }
@@ -3652,6 +3793,8 @@ extension OmniPumpManager: PodCommsDelegate {
                 let newAlerts: AlertSet = podState.activeAlertSlots
 
                 state.updatePodStateFromPodComms(podState)
+                state.earlyControlEnableForNextPod = false
+                state.earlyControlG7TypeForNextPod = false
 
                 return (newFault, oldAlerts, newAlerts)
             }
