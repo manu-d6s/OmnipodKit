@@ -710,9 +710,11 @@ class BluetoothManager: NSObject {
     /// delay while the app is foreground, so a foreground probe connects immediately, is treated as a wake,
     /// disconnects, re-arms, and churns. When we're holding the connection (foreground, or a background Pod
     /// Keep Alive mode) the pod is already connected and the heartbeat rides that link; the probe would
-    /// fight it. Isolated to managerQueue (all probe call sites run there).
+    /// fight it. A host that doesn't hold the connection between commands (a pod handed over by another
+    /// controller) has no link to ride in the foreground, and the probe stays off there for the same reason:
+    /// its own timers run while it is in front. Isolated to managerQueue (all probe call sites run there).
     private var delayedConnectProbeActive: Bool {
-        heartbeatEnabled && !shouldHoldConnection
+        heartbeatEnabled && !shouldHoldConnection && !isAppForeground
     }
 
     /// Enable/disable and schedule the pump-provided heartbeat (delayed-connect loop). Driven by
